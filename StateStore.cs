@@ -38,6 +38,11 @@ public static class StateStore
         public ClockState Clock = new();
         public AaaState Aaa = new();
         public string SavedAt = "";
+        // v1.6.0 后台计时（累计值，跨运行续加；只算实际运行时长）
+        public long ElapsedMs;
+        public int Steps;
+        public string FirstLoginAt = "";
+        public string UpdatedAt = "";
     }
 
     public sealed class AclState { public int Number; public string? Description; public List<RuleState> Rules = new(); }
@@ -80,7 +85,7 @@ public static class StateStore
         public bool HasWrongPassword; public int RetryInterval, RetryTime, BlockTime;
     }
 
-    public static State ToState(Device d, string savedAt)
+    public static State ToState(Device d, RunTimer timer, string updatedAt)
     {
         var s = new State
         {
@@ -93,7 +98,11 @@ public static class StateStore
             InfoCenterEnabled = d.InfoCenterEnabled, AdminDeleted = d.AdminDeleted,
             Vlans = d.Vlans.OrderBy(v => v).ToList(),
             LogHosts = d.LogHosts.ToList(),
-            SavedAt = savedAt
+            SavedAt = updatedAt,
+        ElapsedMs = timer.ElapsedMs,
+        Steps = timer.Steps,
+        FirstLoginAt = timer.FirstLoginAt ?? "",
+        UpdatedAt = updatedAt
         };
         foreach (var a in d.Acls.Values.OrderBy(x => x.Number))
         {
@@ -242,11 +251,11 @@ public static class StateStore
         return d;
     }
 
-    public static bool Save(Device d, string path, out string? error)
+    public static bool Save(Device d, RunTimer timer, string path, out string? error)
     {
         try
         {
-            var s = ToState(d, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            var s = ToState(d, timer, RunTimer.LocalIsoNow());
             File.WriteAllText(path, JsonSerializer.Serialize(s, StateJsonContext.Default.State), new UTF8Encoding(false));
             error = null;
             return true;
@@ -254,17 +263,18 @@ public static class StateStore
         catch (Exception ex) { error = ex.Message; return false; }
     }
 
-    public static Device? Load(string path, out string? error)
+    public static Device? Load(string path, out string? error, out State? raw)
     {
         try
         {
-            if (!File.Exists(path)) { error = null; return null; }
+            if (!File.Exists(path)) { error = null; raw = null; return null; }
             var s = JsonSerializer.Deserialize(File.ReadAllText(path, Encoding.UTF8), StateJsonContext.Default.State);
+            raw = s;
             if (s == null) { error = "存档内容为空"; return null; }
             error = null;
             return FromState(s);
         }
-        catch (Exception ex) { error = ex.Message; return null; }
+        catch (Exception ex) { raw = null; error = ex.Message; return null; }
     }
 
     public static void Delete(string path)

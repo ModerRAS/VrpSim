@@ -18,7 +18,7 @@ dist\VrpSim.exe
 - 提示符：`<HUAWEI>` 用户视图 → `system-view` → `[HUAWEI]`；进入子视图后提示符带视图名
   （`[HUAWEI-aaa]`、`[HUAWEI-GigabitEthernet0/0/1]`、`[HUAWEI-ui-vty0-4]`、`[HUAWEI-port-group-g1]` …）
 - 交互模式**退出时自动存档**到 exe 同目录的 `vrp-sim-state.json`，下次启动自动恢复；
-  `--fresh` 强制新开局，`--persist` 让批处理模式也存档，`reset` 在用户视图恢复出厂配置
+  `--fresh` 强制新开局，`--persist` 让批处理模式也存档，`reset` 在用户视图恢复出厂配置；**要彻底重来（含后台计时累计）就删 exe 同目录的 `vrp-sim-state.json` 或加 `--fresh`**
 
 **运行要求**：`dist/VrpSim.exe` 是 NativeAOT 原生 exe（x86，32/64 位 Windows 均可直接跑；无 .NET 运行时依赖，系统自带 UCRT 即可）；
 从源码构建/发布需要 .NET 10 SDK（release.yml 用 `dotnet publish -r win-x64 -p:PublishAot=true`，CI 的 windows-latest 自带 MSVC C++ 工具链）。
@@ -29,7 +29,7 @@ dist\VrpSim.exe
 | --- | --- |
 | （无） | 交互模式，Tab / ? / 方向键 / 历史可用 |
 | `--batch` | 从标准输入读命令（脚本、管道测试用），不要求 TTY，不启用登录 |
-| `--selftest` | 内置"整套加固 → 14 项自查 + 90 条逐 token 补全快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图/全接口 dis cu/无报错冒烟/新接口类型/HELP FORMAT 回归"，全过返回 0（输出 `SELFTEST OK`） |
+| `--selftest` | 内置"整套加固 → 14 项自查 + 90 条逐 token 补全快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图/全接口 dis cu/无报错冒烟/新接口类型/HELP FORMAT/TIMER 回归"，全过返回 0（输出 `SELFTEST OK`） |
 | `--no-login` | 跳过 console 登录（配合 --batch） |
 | `--fresh` | 忽略上次存档，按出厂状态重新开始 |
 | `--persist` | 批处理模式也读写 `vrp-sim-state.json`（默认只有交互模式存档） |
@@ -64,7 +64,16 @@ dotnet publish VrpSim.csproj -c Release -r win-x64 --self-contained true -p:Publ
 （本机 `dist/VrpSim.exe` 与 Release 同口径：x86 AOT、约 3.14 MB、无需 .NET 运行时。发布需 .NET 10 SDK + MSVC C++ 工具链；
 本机 VS2026 若未被 ILCompiler 自动发现，先 `call vcvarsall.bat x86` 并加 `-p:IlcUseEnvironmentalTools=true`。）
 
-## 键位
+## 计时（v1.6.0，纯后台）
+
+演练用时在后台自动累计，**不在任何界面/命令输出里显示**（check、quit、banner 都不打印），也不参与 `check` 评分、不写进配置：
+
+- **起点**：交互模式 = 第一次打印 `Username:`、等待输入用户名的那一刻；`--no-login` / `--batch` = 进程启动。
+- **累计内容**：每成功执行一条命令记一步；用时只算**实际运行时长**（单调时钟，改系统时间/时区不影响），关掉再开继续累计（应用没运行的时间不计）。
+- **落盘位置**：`vrp-sim-state.json` 新增 `ElapsedMs`（累计毫秒）、`Steps`（累计成功命令数）、`FirstLoginAt`（首次登录开始，本地 ISO 8601 带偏移）、`UpdatedAt`（最近保存时间）。
+- **彻底重来**：删掉 exe 同目录的 `vrp-sim-state.json`（或用 `--fresh`），累计清零重新开始。
+
+## 键位## 键位
 
 | 键 | 行为 |
 | --- | --- |
@@ -90,7 +99,7 @@ dotnet publish VrpSim.csproj -c Release -r win-x64 --self-contained true -p:Publ
 
 ### 补全快照（第一批：加固/配置演练路径）
 
-`Tab` / `?` 已按真机口径逐 token 补齐（覆盖 `演练脚本-14项.txt` 的约 60 条路径；`--selftest` 内置 90 条逐 token 快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图/全接口 dis cu/无报错冒烟/新接口类型/HELP FORMAT 回归）。代表性位置：
+`Tab` / `?` 已按真机口径逐 token 补齐（覆盖 `演练脚本-14项.txt` 的约 60 条路径；`--selftest` 内置 90 条逐 token 快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图/全接口 dis cu/无报错冒烟/新接口类型/HELP FORMAT/TIMER 回归）。代表性位置：
 
 | 输入 | `Tab`（无占位符） | `?`（含类型占位符） |
 | --- | --- | --- |
@@ -203,7 +212,8 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 
 ## 模拟器专有：check（14 项加固自查）
 
-`check` 不是 VRP 命令，只在本模拟器里存在。它按《华为交换机加固手册》14 项判定并给下一步提示：
+`check` 不是 VRP 命令，只在本模拟器里存在。它按《华为交换机加固手册》14 项判定并给下一步提示
+：
 
 | 项 | 判定要点 |
 | --- | --- |
@@ -295,6 +305,7 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 | `Editor.cs` | 行编辑器（Tab/?/方向键/历史） |
 | `Program.cs` | 启动、console 登录、批处理、自检脚本（含 90 条逐 token 快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图/全接口/无报错冒烟/新接口类型/HELP FORMAT 回归） |
 | `HelpFormat.cs` | `?`/Tab 候选排版：两列 + 说明折行 + 命令位置去 `<cr>` |
+| `RunTimer.cs` | 后台计时：t0（登录开始/进程启动）+ 单调时钟累计 + 步数；结果随 `vrp-sim-state.json` 持久化（ElapsedMs/Steps/FirstLoginAt/UpdatedAt），不上屏、不入评分 |
 | `StateStore.cs` | 交互存档 `vrp-sim-state.json` 的读写 |
 | `演练脚本-14项.txt` | 可直接粘进模拟器的整套加固命令 |
 | `saved-config.cfg` | `save` 落盘的当前配置（运行时生成） |

@@ -427,6 +427,7 @@ public sealed class Session
     public string PgName = "";
     public int VlanId;
     public List<string> RangeIfaces = new();
+    public RunTimer Timer = new();
     public bool ExitRequested;
     public bool Saved;
     public Func<string, string?>? ReadLine;

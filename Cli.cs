@@ -253,6 +253,8 @@ public static class Cli
             if (kv.Key >= 1 && kv.Key < norm.Count) norm[kv.Key] = kv.Value;
         var ctx = new ExecCtx { Dev = dev, S = session, Tokens = norm, Caps = finished[0].Caps };
         res.Lines = cmd.Run?.Invoke(ctx) ?? Array.Empty<string>();
+        if (res.Error == null && !res.Lines.Any(l => l.StartsWith("Error:", StringComparison.Ordinal)))
+            session.Timer.NoteStep();
         return res;
     }
 

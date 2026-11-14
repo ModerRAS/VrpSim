@@ -7,6 +7,7 @@ public static class Program
     public static int Main(string[] args)
     {
         try { Console.OutputEncoding = Encoding.UTF8; } catch { }
+        var processStartIso = RunTimer.LocalIsoNow();
         var s = new Session();
         var batch = Console.IsInputRedirected || args.Contains("--batch") || args.Contains("--selftest");
         var selftest = args.Contains("--selftest");
@@ -32,23 +33,25 @@ public static class Program
             }
             else
             {
-                var loaded = StateStore.Load(StateStore.DefaultPath, out var lerr);
+                var loaded = StateStore.Load(StateStore.DefaultPath, out var lerr, out var raw);
                 if (loaded != null)
                 {
                     s.Dev = loaded;
+                    if (raw != null) s.Timer.Prime(raw.ElapsedMs, raw.Steps, raw.FirstLoginAt);
                     Console.WriteLine("  [进度] 已恢复上次配置：" + StateStore.DefaultPath);
                 }
                 else
                 {
                     Console.WriteLine((lerr != null ? "  [进度] 存档读取失败：" + lerr + "；" : "  [进度] 新开局：") +
-                                      "退出时自动存到 " + StateStore.DefaultPath);
+                                      "退出时自动存到 " + StateStore.DefaultPath + "（要彻底重来：删该文件或用 --fresh）");
                 }
             }
             Console.WriteLine();
         }
         if (!batch && !args.Contains("--no-login")) Login(s);
+        else s.Timer.MarkStart(processStartIso);   // 无登录流程（--no-login/--batch）：t0 = 进程启动
         Run(s, batch, persist);
-        if (persist) StateStore.Save(s.Dev, StateStore.DefaultPath, out _);
+        if (persist) StateStore.Save(s.Dev, s.Timer, StateStore.DefaultPath, out _);
         return 0;
     }
 
@@ -72,11 +75,13 @@ public static class Program
         Console.WriteLine("Please Press ENTER.");
         Console.ReadLine();
         var failures = 0;
+        var timerStarted = false;
         while (true)
         {
             Console.WriteLine();
             Console.WriteLine("Login authentication");
             Console.WriteLine();
+            if (!timerStarted) { s.Timer.MarkStart(RunTimer.LocalIsoNow()); timerStarted = true; }   // t0 = 登录开始（第一次打印 Username: 前）
             Console.Write("Username:");
             var u = (Console.ReadLine() ?? "").Trim();
             Console.Write("Password:");
@@ -197,7 +202,7 @@ public static class Program
             if (line == "\u001A") { s.View = "user"; continue; }
             if (line.Trim().Length == 0) continue;
             Process(s, line, s.Prompt().Length);
-            if (persist) StateStore.Save(s.Dev, StateStore.DefaultPath, out _);
+            if (persist) StateStore.Save(s.Dev, s.Timer, StateStore.DefaultPath, out _);
             if (s.ExitRequested) break;
         }
     }
@@ -327,7 +332,7 @@ public static class Program
         var fails = rows.Where(r => r.Ok == false).ToList();
         var candFailed = CompletionSelfTest(s) + CompletionOrderSelfTest(s) + RangeExecSelfTest()
                          + IfaceFormSelfTest() + VlanExecSelfTest() + NullIfaceSelfTest() + ConfigIfaceSelfTest(s)
-                         + NoErrorSelfTest() + NewIfaceSelfTest() + HelpFormatSelfTest();
+                         + NoErrorSelfTest() + NewIfaceSelfTest() + HelpFormatSelfTest() + TimerSelfTest();
         if (fails.Count > 0 || candFailed > 0)
         {
             Console.WriteLine($"SELFTEST: {fails.Count} check item(s) failed, {candFailed} completion/range case(s) failed");
@@ -917,6 +922,106 @@ public static class Program
         Console.WriteLine(failed == 0
             ? $"NEW IFACES OK: {cases.Length + 1}/{cases.Length + 1} cases"
             : $"NEW IFACES: {cases.Length + 1 - failed}/{cases.Length + 1} cases passed");
+        return failed;
+    }
+
+    // TIMER 回归（v1.6.0，纯后台计时）：JSON 字段 roundtrip / 跨运行续加 / 单调时钟 / 不上屏 / 不进配置
+    static int TimerSelfTest()
+    {
+        var failed = 0;
+        var total = 0;
+        void Case(string label, bool ok, string detail = "")
+        {
+            total++;
+            if (ok) return;
+            failed++;
+            Console.WriteLine($"  TIMER FAIL: {label} -> {detail}");
+        }
+        bool Rx(string s, string pat) => System.Text.RegularExpressions.Regex.IsMatch(s, pat);
+        const string IsoRx = @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$";
+        string Exec(Session sess, string line) => string.Join("\n", Cli.Execute(sess.Dev, sess, sess.Commands(), Tokenize(line)).Lines);
+
+        var tmp = Path.Combine(Directory.GetCurrentDirectory(), "vrpsim-timer-test.json");
+        try { File.Delete(tmp); } catch { }
+
+        // 1) 保存后 JSON 四个字段齐全且格式正确
+        var s1 = new Session();
+        s1.Timer.MarkStart(RunTimer.LocalIsoNow());
+        s1.Timer.NoteStep();
+        s1.Timer.NoteStep();
+        s1.Timer.NoteStep();
+        var saved = StateStore.Save(s1.Dev, s1.Timer, tmp, out var saveErr);
+        Case("状态保存", saved && File.Exists(tmp), "err=" + saveErr);
+        long savedElapsed = 0;
+        int savedSteps = 0;
+        string savedFirst = "", savedUpdated = "";
+        if (File.Exists(tmp))
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(tmp));
+            var root = doc.RootElement;
+            var hasElapsed = root.TryGetProperty("ElapsedMs", out var eEl);
+            var hasSteps = root.TryGetProperty("Steps", out var eSt);
+            var hasFirst = root.TryGetProperty("FirstLoginAt", out var eFi);
+            var hasUpdated = root.TryGetProperty("UpdatedAt", out var eUp);
+            Case("JSON 字段 ElapsedMs/Steps/FirstLoginAt/UpdatedAt", hasElapsed && hasSteps && hasFirst && hasUpdated,
+                $"elapsed={hasElapsed} steps={hasSteps} first={hasFirst} updated={hasUpdated}");
+            if (hasElapsed) { savedElapsed = eEl.GetInt64(); Case("ElapsedMs >= 0", savedElapsed >= 0, "ms=" + savedElapsed); }
+            if (hasSteps) { savedSteps = eSt.GetInt32(); Case("Steps == 3", savedSteps == 3, "steps=" + savedSteps); }
+            if (hasFirst) { savedFirst = eFi.GetString() ?? ""; Case("FirstLoginAt 本地 ISO 带偏移", Rx(savedFirst, IsoRx), savedFirst); }
+            if (hasUpdated) { savedUpdated = eUp.GetString() ?? ""; Case("UpdatedAt 本地 ISO 带偏移", Rx(savedUpdated, IsoRx), savedUpdated); }
+        }
+
+        // 2) 重新加载：累计值续上
+        var dev2 = StateStore.Load(tmp, out var lerr, out var raw);
+        Case("状态读取", dev2 != null && raw != null, "err=" + lerr);
+        var s2 = new Session();
+        if (dev2 != null) s2.Dev = dev2;
+        if (raw != null) s2.Timer.Prime(raw.ElapsedMs, raw.Steps, raw.FirstLoginAt);
+        Case("跨运行步数续加", s2.Timer.Steps == savedSteps, $"{s2.Timer.Steps} vs {savedSteps}");
+        Case("跨运行用时续加", s2.Timer.ElapsedMs >= savedElapsed, $"{s2.Timer.ElapsedMs} vs {savedElapsed}");
+        Case("FirstLoginAt 保留", string.IsNullOrEmpty(savedFirst) || s2.Timer.FirstLoginAt == savedFirst, s2.Timer.FirstLoginAt ?? "(null)");
+
+        // 3) 单调时钟：会话内用时单调增、只算实际运行时长
+        s2.Timer.MarkStart(RunTimer.LocalIsoNow());
+        var before = s2.Timer.ElapsedMs;
+        Thread.Sleep(30);
+        s2.Timer.NoteStep();
+        var after = s2.Timer.ElapsedMs;
+        Case("单调时钟累计（sleep 30ms）", after - before >= 20, $"delta={after - before}ms");
+        var saved2 = StateStore.Save(s2.Dev, s2.Timer, tmp, out _);
+        Case("再次保存成功", saved2);
+        if (File.Exists(tmp))
+        {
+            using var doc2 = System.Text.Json.JsonDocument.Parse(File.ReadAllText(tmp));
+            var e2 = doc2.RootElement.GetProperty("ElapsedMs").GetInt64();
+            var st2 = doc2.RootElement.GetProperty("Steps").GetInt32();
+            Case("两次保存单调不减", e2 >= savedElapsed && st2 >= savedSteps, $"elapsed {savedElapsed}->{e2}, steps {savedSteps}->{st2}");
+        }
+
+        // 4) 不上屏：check / quit / 普通命令输出都不含“用时”
+        var s3 = new Session();
+        s3.Timer.MarkStart(RunTimer.LocalIsoNow());
+        Exec(s3, "system-view");
+        Exec(s3, "sysname TIMER-SILENT");
+        var chk = Cli.Execute(s3.Dev, s3, s3.Commands(), Tokenize("check"));
+        Case("check 不打印用时", chk.Lines.All(l => !l.Contains("用时") && !l.Contains("ElapsedMs")), "check lines contain timer");
+        var quit = Cli.Execute(s3.Dev, s3, s3.Commands(), Tokenize("quit"));
+        Case("quit 不打印用时", quit.Lines.All(l => !l.Contains("用时")), string.Join(" | ", quit.Lines));
+
+        // 5) 不进配置输出
+        Case("计时字段不进配置", s3.Dev.RenderConfig().All(l => !l.Contains("ElapsedMs") && !l.Contains("Steps") && !l.Contains("用时")), "config has timer");
+
+        // 6) 删 state / --fresh → 归零（Load 返回 null → 新会话 base=0）
+        try { File.Delete(tmp); } catch { }
+        var dev3 = StateStore.Load(tmp, out _, out var raw3);
+        Case("删 state 后读取为空", dev3 == null && raw3 == null);
+        var s4 = new Session();
+        s4.Timer.Prime(0, 0, null);
+        Case("新会话从 0 计", s4.Timer.ElapsedMs == 0 && s4.Timer.Steps == 0, $"ms={s4.Timer.ElapsedMs} steps={s4.Timer.Steps}");
+
+        Console.WriteLine(failed == 0
+            ? $"TIMER OK: {total}/{total} cases"
+            : $"TIMER: {total - failed}/{total} cases passed");
         return failed;
     }
 
