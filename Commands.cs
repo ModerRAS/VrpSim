@@ -65,7 +65,7 @@ public static class CommandSets
         var kinds = new (string Word, string Help)[]
         {
             ("Ethernet", "Ethernet interface"), ("GigabitEthernet", "GigabitEthernet interface"),
-            ("Vlanif", "VLAN interface"), ("NULL0", "NULL interface")
+            ("Vlanif", "VLAN interface"), ("NULL", "NULL interface")
         };
         return kinds.Where(k => k.Word.StartsWith(p, StringComparison.OrdinalIgnoreCase))
                     .Select(k => new Candidate(k.Word, k.Help));
@@ -88,7 +88,7 @@ public static class CommandSets
     static bool IsIfNumToken(string t) => t.Length > 0 && t.All(ch => char.IsDigit(ch) || ch == '/');
 
     static bool IsIfaceKindToken(string t) =>
-        new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" }.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
+        new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL" }.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
 
     // 类型+编号连写（Ethernet0/0/1、GigabitEthernet0/0/1、Vlanif8）——真机输入不认
     static bool IsConcatIfaceToken(string t)
@@ -116,6 +116,9 @@ public static class CommandSets
     static IEnumerable<Candidate> IfNumFor(Device d, string kind)
     {
         if (kind.Length == 0) return Array.Empty<Candidate>();
+        // NULL 接口编号只有 0
+        if ("NULL".StartsWith(kind, StringComparison.OrdinalIgnoreCase))
+            return new[] { new Candidate("0", "") };
         if ("Vlanif".StartsWith(kind, StringComparison.OrdinalIgnoreCase) || kind.StartsWith("Vlanif", StringComparison.OrdinalIgnoreCase))
             return d.Vlans.OrderBy(v => v).Select(v => new Candidate(v.ToString(), ""));
         var prefix = new[] { "Ethernet", "GigabitEthernet" }
@@ -153,12 +156,12 @@ public static class CommandSets
 
     // 接口类型按真机口径要写全称（不接受 Eth/Gi 这种缩写），大小写不限
     static readonly Func<string, bool> IfKindAccept = t =>
-        new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" }
+        new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL" }
             .Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
 
     static string CanonIfaceKind(string k)
     {
-        foreach (var x in new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" })
+        foreach (var x in new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL" })
             if (x.Equals(k, StringComparison.OrdinalIgnoreCase)) return x;
         return k;
     }
@@ -299,7 +302,8 @@ public static class CommandSets
             case "lupp":
                 return LuppThis(d);
             case "vlan":
-                return WrapThis(d.RenderVlan(c.S.VlanId));
+                // 真机：空 VLAN（无 description/name）display this 只有 # + return，不显示 vlan 行
+                return d.HasVlanCfg(c.S.VlanId) ? WrapThis(d.RenderVlan(c.S.VlanId)) : new List<string> { "#", "return" };
             case "pg":
                 return WrapThis(d.RenderPortGroup(c.S.PgName,
                     d.PortGroups.TryGetValue(c.S.PgName, out var members) ? members : new List<string>()));
@@ -622,12 +626,15 @@ public static class CommandSets
             return EnterRange(c);
         }
         // 真机输入只接受"类型 + 编号"分开写；Ethernet0/0/1 / Vlanif8 这类连写直接按真机报错
+        // （NULL0 例外：eNSP/真机 interface NULL 0 与 interface NULL0 两种写法都接受）
         if (c.Has("if") && !Eq(c.Cap("if"), "NULL0"))
             return ErrAt(c, 1, "Wrong parameter found at '^' position.");
         var kind = CanonIfaceKind(c.Cap("kind"));
+        if (!c.Has("if") && Eq(kind, "NULL") && !Eq(c.Cap("num"), "0"))
+            return ErrAt(c, 2, "Wrong parameter found at '^' position.");
         var name = c.Has("if")
             ? "NULL0"
-            : (Eq(kind, "NULL0") ? "NULL0" : kind + c.Cap("num"));
+            : (Eq(kind, "NULL") ? "NULL0" : kind + c.Cap("num"));
         if (!c.Dev.Ifaces.ContainsKey(name))
         {
             if (name.StartsWith("Vlanif", StringComparison.OrdinalIgnoreCase) && IsInt(name.Substring(6), out var vlan))

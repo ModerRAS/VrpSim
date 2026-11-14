@@ -327,7 +327,8 @@ public static class Program
         var rows = Checks.Run(s.Dev);
         foreach (var l in Checks.Format(rows, s.Dev)) Console.WriteLine(l);
         var fails = rows.Where(r => r.Ok == false).ToList();
-        var candFailed = CompletionSelfTest(s) + CompletionOrderSelfTest(s) + RangeExecSelfTest() + IfaceFormSelfTest() + VlanExecSelfTest();
+        var candFailed = CompletionSelfTest(s) + CompletionOrderSelfTest(s) + RangeExecSelfTest()
+                         + IfaceFormSelfTest() + VlanExecSelfTest() + NullIfaceSelfTest();
         if (fails.Count > 0 || candFailed > 0)
         {
             Console.WriteLine($"SELFTEST: {fails.Count} check item(s) failed, {candFailed} completion/range case(s) failed");
@@ -356,14 +357,15 @@ public static class Program
             ("system", "vlan batch 8 ", true, new[] { "<cr>" }, null),
             ("system", "vlan ", true, new[] { "batch", "INTEGER<1-4094>" }, null),
             ("system", "undo vlan ", true, new[] { "INTEGER<1-4094>", "1", "8" }, null),
-            ("system", "interface ", true, new[] { "range", "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" },
-                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "Vlanif8", "<interface-type>", "<interface>" }),
+            ("system", "interface ", true, new[] { "range", "Ethernet", "GigabitEthernet", "Vlanif", "NULL" },
+                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "Vlanif8", "NULL0", "<interface-type>", "<interface>" }),
             ("system", "interface ethernet", false, new[] { "Ethernet" }, new[] { "Ethernet0/0/1" }),
+            ("system", "interface NULL ", false, new[] { "0" }, null),
             ("system", "interface Vlanif ", false, new[] { "1", "8" }, null),
             ("system", "interface GigabitEthernet ", false, new[] { "0/0/1", "0/0/12" }, null),
             ("system", "interface Ethernet ", false, new[] { "0/0/1", "0/0/16" }, null),
-            ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" },
-                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "Vlanif8" }),
+            ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL" },
+                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "Vlanif8", "NULL0" }),
             ("system", "interface range ethernet ", false, new[] { "0/0/1", "0/0/16" }, new[] { "ethernet0/0/1" }),
             ("system", "interface range Ethernet 0/0/1 ", true, new[] { "to" }, null),
             ("system", "interface range Ethernet 0/0/1 to Ethernet ", false, new[] { "0/0/2", "0/0/16" }, null),
@@ -472,10 +474,10 @@ public static class Program
     {
         var cases = new (string View, string Text, bool Help, string[] Order, string[] Absent, int Count)[]
         {
-            ("system", "interface ", true, new[] { "range", "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" },
-                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "<interface-type>", "<interface>" }, 5),
-            ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" },
-                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "<interface-type>", "<interface>" }, 4),
+            ("system", "interface ", true, new[] { "range", "Ethernet", "GigabitEthernet", "Vlanif", "NULL" },
+                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "NULL0", "<interface-type>", "<interface>" }, 5),
+            ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL" },
+                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "NULL0", "<interface-type>", "<interface>" }, 4),
             ("system", "interface ethernet", false, new[] { "Ethernet" }, new[] { "Ethernet0/0/1" }, 1),
             ("system", "vlan ", true, new[] { "batch", "INTEGER<1-4094>" }, new[] { "1", "8" }, 2),
         };
@@ -601,6 +603,57 @@ public static class Program
         return failed;
     }
 
+    // NULL 接口写法回归（eNSP/真机：候选是 NULL；interface NULL 0 与 interface NULL0 都接受）
+    static int NullIfaceSelfTest()
+    {
+        var cases = new (string Label, string[] Lines)[]
+        {
+            ("NULL 0", new[] { "system-view", "interface NULL 0" }),
+            ("NULL0", new[] { "system-view", "interface NULL0" }),
+        };
+        var failed = 0;
+        foreach (var tc in cases)
+        {
+            var dev = Device.Factory();
+            var sess = new Session { Dev = dev };
+            var last = new ExecResult();
+            foreach (var line in tc.Lines)
+            {
+                last = Cli.Execute(dev, sess, sess.Commands(), Tokenize(line));
+                if (last.Error != null) break;
+            }
+            var ok = last.Error == null && sess.View == "iface" && sess.IfName == "NULL0"
+                     && sess.Prompt() == "[HUAWEI-NULL0]";
+            var thisRes = Cli.Execute(dev, sess, sess.Commands(), Tokenize("display this"));
+            ok = ok && thisRes.Error == null && thisRes.Lines.SequenceEqual(new[] { "#", "interface NULL0", "#", "return" });
+            // 接口块渲染（display this / display current-configuration 的块首行）必须是 interface NULL0
+            ok = ok && dev.Ifaces.TryGetValue("NULL0", out var nullIface)
+                     && dev.RenderIface(nullIface).FirstOrDefault() == "interface NULL0";
+            if (ok) continue;
+            failed++;
+            Console.WriteLine($"  NULL IFACE FAIL: {tc.Label}");
+        }
+        {
+            // 非法编号：interface NULL 1 必须报错且留在系统视图
+            var dev = Device.Factory();
+            var sess = new Session { Dev = dev };
+            Cli.Execute(dev, sess, sess.Commands(), Tokenize("system-view"));
+            var r = Cli.Execute(dev, sess, sess.Commands(), Tokenize("interface NULL 1"));
+            var ok = r.Error != null || r.Lines.Any(l => l.StartsWith("Error:", StringComparison.Ordinal));
+            ok = ok && sess.View == "system";
+            if (ok) failed += 0;
+            else
+            {
+                failed++;
+                Console.WriteLine("  NULL IFACE FAIL: 非法编号 NULL 1 未报错或进了视图");
+            }
+        }
+        Console.WriteLine(failed == 0
+            ? "NULL IFACE OK: 3/3 cases"
+            : $"NULL IFACE: {3 - failed}/3 cases passed");
+        return failed;
+    }
+
     // vlan <id> / VLAN 视图回归（用户真机反馈）
     static int VlanExecSelfTest()
     {
@@ -650,7 +703,11 @@ public static class Program
         Step("vlan 300");
         checks.Add(("vlan 300 prompt", sess.Prompt() == "[HUAWEI-vlan300]"));
         var t3 = Cli.Execute(dev, sess, sess.Commands(), Tokenize("display this"));
-        checks.Add(("空 VLAN display this", t3.Lines.SequenceEqual(new[] { "#", "vlan 300", "#", "return" })));
+        checks.Add(("空 VLAN display this 只有 #/return", t3.Lines.SequenceEqual(new[] { "#", "return" })));
+        Step("quit");
+        Step("vlan 301", "description Only-Dsc");
+        var t4 = Cli.Execute(dev, sess, sess.Commands(), Tokenize("display this"));
+        checks.Add(("仅 description 的 VLAN block", t4.Lines.SequenceEqual(new[] { "#", "vlan 301", " description Only-Dsc", "#", "return" })));
         Step("quit");
         foreach (var (label, ok) in checks)
         {

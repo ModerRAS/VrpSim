@@ -26,7 +26,7 @@ dist\VrpSim.exe
 | --- | --- |
 | （无） | 交互模式，Tab / ? / 方向键 / 历史可用 |
 | `--batch` | 从标准输入读命令（脚本、管道测试用），不要求 TTY，不启用登录 |
-| `--selftest` | 内置"整套加固 → 14 项自查 + 73 条逐 token 补全快照 + 顺序/大小写混用/接口写法/VLAN 视图回归"，全过返回 0（输出 `SELFTEST OK`） |
+| `--selftest` | 内置"整套加固 → 14 项自查 + 74 条逐 token 补全快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图回归"，全过返回 0（输出 `SELFTEST OK`） |
 | `--no-login` | 跳过 console 登录（配合 --batch） |
 | `--fresh` | 忽略上次存档，按出厂状态重新开始 |
 | `--persist` | 批处理模式也读写 `vrp-sim-state.json`（默认只有交互模式存档） |
@@ -57,20 +57,23 @@ dist\VrpSim.exe
 关键字命中后按**规范全称**执行（`dis cu` 可用）。参数位置给候选：接口类型、已建 ACL、本地用户、VLAN、read/write、端口组名等。
 接口输入**只接受"类型 + 编号"分开写**：`interface GigabitEthernet 0/0/1`、`interface Vlanif 8`、`interface Ethernet 0/0/1`；
 `interface Ethernet0/0/1` / `interface Vlanif8` 这类连写在真机上直接报 `Wrong parameter found at '^' position.`（^ 指向连写 token），模拟器同口径。
-接口类型要写全称（`Ethernet` / `GigabitEthernet` / `Vlanif` / `NULL0`，大小写不限），`Eth 0/0/1` 这种缩写不认；
+接口类型要写全称（`Ethernet` / `GigabitEthernet` / `Vlanif` / `NULL`，大小写不限），`Eth 0/0/1` 这种缩写不认；
+**NULL 接口**：候选只出类型 `NULL`；`interface NULL 0` 与 `interface NULL0` 两种写法都接受，都进 `[HUAWEI-NULL0]`，
+`display this` 与配置渲染输出 `interface NULL0`（编号只允许 0，其它编号报错）；
 `interface range` 两端类型可混用大小写（`interface range ethernet 0/0/1 to Ethernet 0/0/16` 合法），进视图与配置渲染统一成规范拼写
 （配置回显仍是真机的连写形式 `interface GigabitEthernet0/0/1`）。
 
 ### 补全快照（第一批：加固/配置演练路径）
 
-`Tab` / `?` 已按真机口径逐 token 补齐（覆盖 `演练脚本-14项.txt` 的约 60 条路径；`--selftest` 内置 73 条逐 token 快照 + 顺序/大小写混用/接口写法/VLAN 视图回归）。代表性位置：
+`Tab` / `?` 已按真机口径逐 token 补齐（覆盖 `演练脚本-14项.txt` 的约 60 条路径；`--selftest` 内置 74 条逐 token 快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图回归）。代表性位置：
 
 | 输入 | `Tab`（无占位符） | `?`（含类型占位符） |
 | --- | --- | --- |
 | `sysname ` | （自由文本） | `STRING<1-246>` |
-| `interface ` | `range` `Ethernet` `GigabitEthernet` `Vlanif` `NULL0`（顺序固定，**不列具体接口名**） | 同左（不显示占位符） |
+| `interface ` | `range` `Ethernet` `GigabitEthernet` `Vlanif` `NULL`（顺序固定，**不列具体接口名**） | 同左（不显示占位符） |
 | `interface ethernet` | 唯一补成 `Ethernet` | — |
 | `interface Vlanif ` | `1` `8`（按 VLAN 给） | `<interface-number>` + VLAN 号 |
+| `interface NULL ` | `0`（NULL 只有编号 0） | `<interface-number>` + `0` |
 | `interface range ` | 同 4 种接口类型（不列具体接口名） | 同左 |
 | `interface range ethernet ` | `0/0/1` … `0/0/16`（类型大小写不限） | `<interface-number>` |
 | `interface range Ethernet 0/0/1 to Ethernet ` | `0/0/1` … `0/0/16` | `<interface-number>` |
@@ -106,7 +109,7 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 | 接口 `[HUAWEI-GigabitEthernet0/0/1]` | `description`、`port link-type`、`port default vlan`、`port trunk allow-pass vlan`、`traffic-filter inbound/outbound acl`、`shutdown` / `undo shutdown`、`ip address`（仅 Vlanif）、`display this` |
 | 接口范围 `[HUAWEI-port-group]`（模拟器扩展） | 用 `interface range <类型> <编号> to <类型> <编号>` 进入（两端类型可混用大小写），支持 `shutdown`、`description`、`port …`、`traffic-filter …` 与对应 `undo` 批量生效；`ip address` 不支持 |
 | 端口组 `[HUAWEI-port-group-<名>]` | `group-member <接口> [to <接口2>]`、`undo group-member [<接口>]`，以及接口视图的 `shutdown` / `description` / `port …` / `traffic-filter …` 批量作用于成员口 |
-| VLAN `[HUAWEI-vlan<id>]` | `description <text>`、`name <text>`、`undo description`、`undo name`、`display this`（格式 `#` / `vlan 200` / ` description …` / `#` / `return`）；`quit` 回系统视图；`vlan <id>` 已存在直接进、不存在则创建 |
+| VLAN `[HUAWEI-vlan<id>]` | `description <text>`、`name <text>`、`undo description`、`undo name`、`display this`；`quit` 回系统视图；`vlan <id>` 已存在直接进、不存在则创建。`display this` 真机口径：**空 VLAN 只有 `#` + `return`**；有 description/name 才是 `#` / `vlan 200` / ` description …` / `#` / `return`（1 空格缩进） |
 | VTY `[HUAWEI-ui-vty0-4]` | `authentication-mode`、`acl <n> inbound`、`idle-timeout`、`protocol inbound` |
 
 `display` 支持：`current-configuration`（含 `| include / begin / exclude <文本>`）、`saved-configuration`、`version`、`clock`、`this`（各视图都按真机格式 `#` 包裹、末尾 `return`）、`interface [brief]`、`acl [all\|编号]`、`telnet server status`、`ftp server`、`http server`、`snmp-agent community`、`user-interface`、`local-user`、`local-aaa-user password policy administrator`（策略视图内走 `display this`）、`logbuffer`、`cpu-usage`、`memory-usage`、`power`、`vlan`、`ip interface brief`、`stelnet server`、`ssh server status`、`users`。
@@ -194,6 +197,8 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 - `interface` 只接受"类型 + 编号"分开写（真机口径）；配置回显仍是连写形式（`interface GigabitEthernet0/0/1`），这两者不矛盾
 - VLAN 视图只实现 `description` / `name` 最小集，真机的 `statistics`、`mac-vlan` 等未实现
 - `group-member` 仍按"完整接口名"输入与候选（如 `group-member GigabitEthernet0/0/1`），与 `interface` 的新口径暂不一致，待确认
+- **eNSP 版本差异**：eNSP 内置 S5700 是 **V200R001C00 / VRP 5.110**（2016 年前后），比真机 **V200R011C10SPC600** 老 6+ 代；
+  本模拟器的接口写法/候选/VLAN 视图等口径以**用户真机 V200R011**为准，eNSP 只作旁证（两者命令行文案、默认值可能有出入，冲突不要照抄 eNSP）
 
 ## 扩展
 
@@ -211,7 +216,7 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 | `Commands.cs` | 9 个视图的命令定义与处理函数（含 port-group / interface range） |
 | `Checks.cs` | 14 项加固判定与报告 |
 | `Editor.cs` | 行编辑器（Tab/?/方向键/历史） |
-| `Program.cs` | 启动、console 登录、批处理、自检脚本（含 73 条逐 token 快照 + 顺序/大小写混用/接口写法/VLAN 视图回归） |
+| `Program.cs` | 启动、console 登录、批处理、自检脚本（含 74 条逐 token 快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图回归） |
 | `StateStore.cs` | 交互存档 `vrp-sim-state.json` 的读写 |
 | `演练脚本-14项.txt` | 可直接粘进模拟器的整套加固命令 |
 | `saved-config.cfg` | `save` 落盘的当前配置（运行时生成） |
