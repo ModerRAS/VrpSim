@@ -327,10 +327,10 @@ public static class Program
         var rows = Checks.Run(s.Dev);
         foreach (var l in Checks.Format(rows, s.Dev)) Console.WriteLine(l);
         var fails = rows.Where(r => r.Ok == false).ToList();
-        var candFailed = CompletionSelfTest(s);
+        var candFailed = CompletionSelfTest(s) + CompletionOrderSelfTest(s) + RangeExecSelfTest() + IfaceFormSelfTest() + VlanExecSelfTest();
         if (fails.Count > 0 || candFailed > 0)
         {
-            Console.WriteLine($"SELFTEST: {fails.Count} check item(s) failed, {candFailed} completion case(s) failed");
+            Console.WriteLine($"SELFTEST: {fails.Count} check item(s) failed, {candFailed} completion/range case(s) failed");
             return 1;
         }
         Console.WriteLine("SELFTEST OK");
@@ -354,10 +354,17 @@ public static class Program
             ("system", "sysname ", true, new[] { "STRING<1-246>" }, null),
             ("system", "vlan batch ", true, new[] { "INTEGER<1-4094>", "8" }, null),
             ("system", "vlan batch 8 ", true, new[] { "<cr>" }, null),
-            ("system", "interface ", true, new[] { "range", "Ethernet", "GigabitEthernet", "Vlanif", "NULL0", "<interface-type>" }, null),
+            ("system", "vlan ", true, new[] { "batch", "INTEGER<1-4094>" }, null),
+            ("system", "undo vlan ", true, new[] { "INTEGER<1-4094>", "1", "8" }, null),
+            ("system", "interface ", true, new[] { "range", "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" },
+                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "Vlanif8", "<interface-type>", "<interface>" }),
+            ("system", "interface ethernet", false, new[] { "Ethernet" }, new[] { "Ethernet0/0/1" }),
             ("system", "interface Vlanif ", false, new[] { "1", "8" }, null),
             ("system", "interface GigabitEthernet ", false, new[] { "0/0/1", "0/0/12" }, null),
-            ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif" }, null),
+            ("system", "interface Ethernet ", false, new[] { "0/0/1", "0/0/16" }, null),
+            ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" },
+                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "Vlanif8" }),
+            ("system", "interface range ethernet ", false, new[] { "0/0/1", "0/0/16" }, new[] { "ethernet0/0/1" }),
             ("system", "interface range Ethernet 0/0/1 ", true, new[] { "to" }, null),
             ("system", "interface range Ethernet 0/0/1 to Ethernet ", false, new[] { "0/0/2", "0/0/16" }, null),
             ("system", "acl ", true, new[] { "number", "INTEGER<2000-3999>", "2000", "3000" }, null),
@@ -460,13 +467,210 @@ public static class Program
         expect == "<cr>" ? words.Any(w => w.Length == 0)
                          : words.Any(w => string.Equals(w, expect, StringComparison.OrdinalIgnoreCase));
 
+    // interface 候选顺序/纯净度回归（用户真机反馈：只出类型 + range，不出完整接口名）
+    static int CompletionOrderSelfTest(Session s)
+    {
+        var cases = new (string View, string Text, bool Help, string[] Order, string[] Absent, int Count)[]
+        {
+            ("system", "interface ", true, new[] { "range", "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" },
+                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "<interface-type>", "<interface>" }, 5),
+            ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" },
+                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "<interface-type>", "<interface>" }, 4),
+            ("system", "interface ethernet", false, new[] { "Ethernet" }, new[] { "Ethernet0/0/1" }, 1),
+            ("system", "vlan ", true, new[] { "batch", "INTEGER<1-4094>" }, new[] { "1", "8" }, 2),
+        };
+        var failed = 0;
+        foreach (var tc in cases)
+        {
+            var words = CompleteWords(s, tc.View, tc.Text, tc.Help);
+            var bad = words.Count != tc.Count;
+            var detail = $"count={words.Count} want={tc.Count}";
+            if (!bad)
+                for (var i = 0; i < tc.Order.Length; i++)
+                    if (!string.Equals(words[i], tc.Order[i], StringComparison.OrdinalIgnoreCase))
+                    {
+                        bad = true;
+                        detail = $"pos{i}: got [{words[i]}] want [{tc.Order[i]}]";
+                        break;
+                    }
+            if (!bad)
+                foreach (var a in tc.Absent)
+                    if (ContainsWord(words, a)) { bad = true; detail = $"unexpected candidate: {a}"; break; }
+            if (!bad) continue;
+            failed++;
+            Console.WriteLine($"  COMPLETION ORDER FAIL: [{tc.View}] \"{tc.Text}\" -> {detail}");
+            Console.WriteLine("    got: " + string.Join(" | ", words));
+        }
+        Console.WriteLine(failed == 0
+            ? $"COMPLETION ORDER OK: {cases.Length}/{cases.Length} cases"
+            : $"COMPLETION ORDER: {cases.Length - failed}/{cases.Length} cases passed");
+        return failed;
+    }
+
+    // interface range 大小写混用执行回归（用户真机反馈：合法写法必须能进 port-group、配置按规范拼写渲染）
+    static int RangeExecSelfTest()
+    {
+        var cases = new (string Label, string[] Lines, bool WantError, string First, string Last, int Count)[]
+        {
+            ("lower-first", new[] { "system-view", "interface range ethernet 0/0/1 to Ethernet 0/0/16", "shutdown" }, false, "Ethernet0/0/1", "Ethernet0/0/16", 16),
+            ("lower-last", new[] { "system-view", "interface range Ethernet 0/0/2 to ethernet 0/0/3", "shutdown" }, false, "Ethernet0/0/2", "Ethernet0/0/3", 2),
+            ("concat-range", new[] { "system-view", "interface range Ethernet0/0/4 to Ethernet0/0/6" }, true, "", "", 0),
+            ("type-mismatch", new[] { "system-view", "interface range Ethernet 0/0/1 to GigabitEthernet 0/0/2" }, true, "", "", 0),
+            ("number-out-of-range", new[] { "system-view", "interface range Ethernet 0/0/1 to Ethernet 0/0/99" }, true, "", "", 0),
+            ("concat-single", new[] { "system-view", "interface Ethernet0/0/1" }, true, "", "", 0),
+        };
+        var failed = 0;
+        foreach (var tc in cases)
+        {
+            var dev = Device.Factory();
+            var sess = new Session { Dev = dev };
+            var last = new ExecResult();
+            foreach (var line in tc.Lines)
+            {
+                last = Cli.Execute(dev, sess, sess.Commands(), Tokenize(line));
+                if (last.Error != null) break;
+            }
+            var gotErr = last.Error != null || last.Lines.Any(l => l.StartsWith("Error:", StringComparison.Ordinal));
+            var ok = gotErr == tc.WantError;
+            var detail = "";
+            if (ok && !tc.WantError)
+            {
+                var names = sess.RangeIfaces;
+                ok = names.Count == tc.Count && names[0] == tc.First && names[^1] == tc.Last
+                     && sess.View == "range" && sess.Prompt() == "[HUAWEI-port-group]"
+                     && names.All(n => dev.Ifaces.TryGetValue(n, out var i) && i.Shutdown);
+                if (!ok) detail = $"count={names.Count} first={(names.Count > 0 ? names[0] : "-")} last={(names.Count > 0 ? names[^1] : "-")} view={sess.View} prompt={sess.Prompt()}";
+                var cfg = dev.RenderConfig();
+                if (ok && (!cfg.Contains("interface " + tc.First) || cfg.Any(l => l.StartsWith("ethernet0/0", StringComparison.Ordinal))))
+                {
+                    ok = false;
+                    detail = "config render not canonical";
+                }
+            }
+            if (ok) continue;
+            failed++;
+            Console.WriteLine($"  RANGE CASE FAIL: {tc.Label} -> {detail}");
+        }
+        Console.WriteLine(failed == 0
+            ? $"RANGE MIXED-CASE OK: {cases.Length}/{cases.Length} cases"
+            : $"RANGE MIXED-CASE: {cases.Length - failed}/{cases.Length} cases passed");
+        return failed;
+    }
+
+    // interface 写法回归（用户真机反馈）：只接受"类型 编号"分开写；连写报 Wrong parameter 且不进视图
+    static int IfaceFormSelfTest()
+    {
+        var cases = new (string Label, string[] Lines, bool WantError, string View, string Prompt)[]
+        {
+            ("spaced-eth", new[] { "system-view", "interface Ethernet 0/0/1" }, false, "iface", "[HUAWEI-Ethernet0/0/1]"),
+            ("spaced-ge", new[] { "system-view", "interface GigabitEthernet 0/0/1" }, false, "iface", "[HUAWEI-GigabitEthernet0/0/1]"),
+            ("spaced-vlanif", new[] { "system-view", "vlan batch 8", "interface Vlanif 8" }, false, "iface", "[HUAWEI-Vlanif8]"),
+            ("concat-eth", new[] { "system-view", "interface Ethernet0/0/1" }, true, "system", "[HUAWEI]"),
+            ("concat-ge", new[] { "system-view", "interface GigabitEthernet0/0/1" }, true, "system", "[HUAWEI]"),
+            ("concat-vlanif", new[] { "system-view", "interface Vlanif8" }, true, "system", "[HUAWEI]"),
+        };
+        var failed = 0;
+        foreach (var tc in cases)
+        {
+            var dev = Device.Factory();
+            var sess = new Session { Dev = dev };
+            var last = new ExecResult();
+            foreach (var line in tc.Lines)
+            {
+                last = Cli.Execute(dev, sess, sess.Commands(), Tokenize(line));
+                if (last.Error != null) break;
+            }
+            var gotErr = last.Error != null || last.Lines.Any(l => l.StartsWith("Error:", StringComparison.Ordinal));
+            var ok = gotErr == tc.WantError && sess.View == tc.View && sess.Prompt() == tc.Prompt;
+            var detail = $"err={gotErr} view={sess.View} prompt={sess.Prompt()}";
+            if (ok && tc.WantError)
+            {
+                // 连写报错：^ 指向该 token 起点（[HUAWEI] + "interface " = 18 列）
+                var caret = new string(' ', 18) + "^";
+                ok = last.Lines.Contains(caret) && last.Lines.Any(l => l.Contains("Wrong parameter found at '^' position."));
+                detail += ok ? "" : " caret/error 文案不符";
+            }
+            if (ok) continue;
+            failed++;
+            Console.WriteLine($"  IFACE FORM FAIL: {tc.Label} -> {detail}");
+            if (last.Lines.Length > 0) Console.WriteLine("    lines: " + string.Join(" / ", last.Lines.Take(4)));
+        }
+        Console.WriteLine(failed == 0
+            ? $"IFACE FORM OK: {cases.Length}/{cases.Length} cases"
+            : $"IFACE FORM: {cases.Length - failed}/{cases.Length} cases passed");
+        return failed;
+    }
+
+    // vlan <id> / VLAN 视图回归（用户真机反馈）
+    static int VlanExecSelfTest()
+    {
+        var dev = Device.Factory();
+        var sess = new Session { Dev = dev };
+        var failed = 0;
+        var checks = new List<(string Label, bool Ok)>();
+        void Step(params string[] lines)
+        {
+            foreach (var line in lines)
+            {
+                var r = Cli.Execute(dev, sess, sess.Commands(), Tokenize(line));
+                if (r.Error != null) { failed++; Console.WriteLine($"  VLAN CASE FAIL: [{line}] -> {r.Error}"); return; }
+            }
+        }
+        Step("system-view");
+        var before = dev.Vlans.Count;
+        Step("vlan 200");
+        checks.Add(("vlan 200 进视图", sess.View == "vlan" && sess.VlanId == 200 && sess.Prompt() == "[HUAWEI-vlan200]"));
+        checks.Add(("vlan 200 已创建", dev.Vlans.Contains(200) && dev.Vlans.Count == before + 1));
+        Step("description GuanLi-Vlan", "name Manage");
+        checks.Add(("description/name 生效", dev.VlanCfgs.TryGetValue(200, out var c200) && c200.Description == "GuanLi-Vlan" && c200.Name == "Manage"));
+        var thisRes = Cli.Execute(dev, sess, sess.Commands(), Tokenize("display this"));
+        var expectThis = new[] { "#", "vlan 200", " description GuanLi-Vlan", " name Manage", "#", "return" };
+        checks.Add(("display this 格式", thisRes.Error == null && thisRes.Lines.SequenceEqual(expectThis)));
+        Step("quit");
+        checks.Add(("quit 回系统视图", sess.View == "system"));
+        var cfg = dev.RenderConfig();
+        checks.Add(("配置渲染 vlan 块", cfg.Contains("vlan 200") && cfg.Contains(" description GuanLi-Vlan") && cfg.Contains(" name Manage")));
+        checks.Add(("vlan batch 不含 200", !cfg.Any(l => l.StartsWith("vlan batch") && l.Split(' ').Contains("200"))));
+        Step("vlan batch 201 202 203");
+        cfg = dev.RenderConfig();
+        checks.Add(("无描述 VLAN 合并/压缩", cfg.Any(l => l.StartsWith("vlan batch") && l.Contains("201 to 203"))));
+        var cnt = dev.Vlans.Count;
+        Step("vlan 201");
+        checks.Add(("已存在 VLAN 直接进视图", sess.View == "vlan" && sess.VlanId == 201 && dev.Vlans.Count == cnt));
+        Step("quit");
+        var vlanRes = Cli.Execute(dev, sess, sess.Commands(), Tokenize("display vlan"));
+        checks.Add(("display vlan 计数", vlanRes.Lines.Length > 0 && vlanRes.Lines[0].Contains("The total number of vlans is " + dev.Vlans.Count)));
+        Step("undo vlan 200");
+        cfg = dev.RenderConfig();
+        checks.Add(("undo vlan 200 移除", !dev.Vlans.Contains(200) && !cfg.Contains("vlan 200") && !cfg.Any(l => l.StartsWith("vlan batch") && l.Split(' ').Contains("200"))));
+        var e1 = Cli.Execute(dev, sess, sess.Commands(), Tokenize("undo vlan 999"));
+        checks.Add(("undo 不存在 VLAN 报错", e1.Lines.Any(l => l.StartsWith("Error:", StringComparison.Ordinal) && l.Contains("does not exist"))));
+        var e2 = Cli.Execute(dev, sess, sess.Commands(), Tokenize("undo vlan 1"));
+        checks.Add(("VLAN 1 不可删", e2.Lines.Any(l => l.StartsWith("Error:", StringComparison.Ordinal) && l.Contains("default VLAN"))));
+        Step("vlan 300");
+        checks.Add(("vlan 300 prompt", sess.Prompt() == "[HUAWEI-vlan300]"));
+        var t3 = Cli.Execute(dev, sess, sess.Commands(), Tokenize("display this"));
+        checks.Add(("空 VLAN display this", t3.Lines.SequenceEqual(new[] { "#", "vlan 300", "#", "return" })));
+        Step("quit");
+        foreach (var (label, ok) in checks)
+        {
+            if (ok) continue;
+            failed++;
+            Console.WriteLine($"  VLAN CASE FAIL: {label}");
+        }
+        Console.WriteLine(failed == 0
+            ? $"VLAN VIEW OK: {checks.Count}/{checks.Count} cases"
+            : $"VLAN VIEW: {checks.Count - failed}/{checks.Count} cases passed");
+        return failed;
+    }
+
     static List<string> HardeningScript()
     {
         var L = new List<string>
         {
             "system-view", "sysname SW-JF-01",
             "vlan batch 8",
-            "interface Vlanif8", "ip address 192.168.12.4 255.255.255.0", "description GuanLi-WangAn", "quit",
+            "interface Vlanif 8", "ip address 192.168.12.4 255.255.255.0", "description GuanLi-WangAn", "quit",
             "acl number 2000", "description Manager", "rule 5 permit source 192.168.12.15 0", "rule 10 deny", "quit",
             "acl number 2001", "description WangJian", "rule 5 permit source 192.168.12.1 0", "rule 10 deny", "quit",
             "acl number 3000", "description Normal",
@@ -484,17 +688,17 @@ public static class Program
             "rule permit ip",
             "rule deny tcp destination-port eq 445",
             "quit",
-            "interface GigabitEthernet0/0/1",
+            "interface GigabitEthernet 0/0/1",
             "port link-type access", "port default vlan 8",
             "traffic-filter inbound acl 3000", "traffic-filter outbound acl 3000",
             "undo shutdown", "quit",
-            "interface GigabitEthernet0/0/12",
+            "interface GigabitEthernet 0/0/12",
             "port link-type trunk", "port trunk allow-pass vlan 8",
             "traffic-filter inbound acl 3000", "traffic-filter outbound acl 3000",
             "undo shutdown", "quit"
         };
-        for (var i = 2; i <= 11; i++) { L.Add($"interface GigabitEthernet0/0/{i}"); L.Add("shutdown"); L.Add("quit"); }
-        for (var i = 1; i <= 16; i++) { L.Add($"interface Ethernet0/0/{i}"); L.Add("shutdown"); L.Add("quit"); }
+        for (var i = 2; i <= 11; i++) { L.Add($"interface GigabitEthernet 0/0/{i}"); L.Add("shutdown"); L.Add("quit"); }
+        for (var i = 1; i <= 16; i++) { L.Add($"interface Ethernet 0/0/{i}"); L.Add("shutdown"); L.Add("quit"); }
         L.AddRange(new[]
         {
             "aaa",

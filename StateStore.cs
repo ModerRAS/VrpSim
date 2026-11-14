@@ -25,6 +25,7 @@ public static class StateStore
         public List<UserState> Users = new();
         public List<UiState> Uis = new();
         public List<PgState> PortGroups = new();
+        public List<VlanCfgState> VlanCfgs = new();
         public List<CommunityState> Communities = new();
         public List<TargetState> Targets = new();
         public List<string> LogHosts = new();
@@ -58,6 +59,7 @@ public static class StateStore
         public bool IdleSet; public int IdleMin = 10, IdleSec; public string? Protocol;
     }
     public sealed class PgState { public string Name = ""; public List<string> Members = new(); }
+    public sealed class VlanCfgState { public int Id; public string? Description; public string? Name; }
     public sealed class CommunityState { public bool Read = true; public string PasswordCipher = ""; public int? Acl; }
     public sealed class TargetState { public string Ip = ""; public int Port = 162; public string SecurityCipher = ""; public string Version = "v2c"; }
     public sealed class ClockState
@@ -129,6 +131,8 @@ public static class StateStore
         }
         foreach (var g in d.PortGroups)
             s.PortGroups.Add(new PgState { Name = g.Key, Members = g.Value.ToList() });
+        foreach (var v in d.VlanCfgs)
+            s.VlanCfgs.Add(new VlanCfgState { Id = v.Key, Description = v.Value.Description, Name = v.Value.Name });
         foreach (var c in d.Communities)
             s.Communities.Add(new CommunityState { Read = c.Read, PasswordCipher = Device.Cipher(c.Password), Acl = c.Acl });
         foreach (var t in d.Targets)
@@ -201,6 +205,8 @@ public static class StateStore
             });
         if (s.PortGroups.Count > 0)
             d.PortGroups = s.PortGroups.ToDictionary(g => g.Name, g => g.Members.ToList());
+        if (s.VlanCfgs.Count > 0)
+            d.VlanCfgs = s.VlanCfgs.ToDictionary(v => v.Id, v => new VlanCfg { Id = v.Id, Description = v.Description, Name = v.Name });
         d.Communities = s.Communities.Select(c => new SnmpCommunity
         {
             Read = c.Read, Password = Device.Uncipher(c.PasswordCipher) ?? "", Acl = c.Acl

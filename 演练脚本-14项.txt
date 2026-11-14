@@ -1,7 +1,7 @@
 system-view
 sysname SW-JF-01
 vlan batch 8
-interface Vlanif8
+interface Vlanif 8
 ip address 192.168.12.4 255.255.255.0
 description GuanLi-WangAn
 quit
@@ -27,99 +27,99 @@ rule 35 deny udp destination-port eq 445
 rule 40 deny udp destination-port eq 3389
 rule 45 permit ip
 quit
-interface GigabitEthernet0/0/1
+interface GigabitEthernet 0/0/1
 port link-type access
 port default vlan 8
 traffic-filter inbound acl 3000
 traffic-filter outbound acl 3000
 undo shutdown
 quit
-interface GigabitEthernet0/0/12
+interface GigabitEthernet 0/0/12
 port link-type trunk
 port trunk allow-pass vlan 8
 traffic-filter inbound acl 3000
 traffic-filter outbound acl 3000
 undo shutdown
 quit
-interface GigabitEthernet0/0/2
+interface GigabitEthernet 0/0/2
 shutdown
 quit
-interface GigabitEthernet0/0/3
+interface GigabitEthernet 0/0/3
 shutdown
 quit
-interface GigabitEthernet0/0/4
+interface GigabitEthernet 0/0/4
 shutdown
 quit
-interface GigabitEthernet0/0/5
+interface GigabitEthernet 0/0/5
 shutdown
 quit
-interface GigabitEthernet0/0/6
+interface GigabitEthernet 0/0/6
 shutdown
 quit
-interface GigabitEthernet0/0/7
+interface GigabitEthernet 0/0/7
 shutdown
 quit
-interface GigabitEthernet0/0/8
+interface GigabitEthernet 0/0/8
 shutdown
 quit
-interface GigabitEthernet0/0/9
+interface GigabitEthernet 0/0/9
 shutdown
 quit
-interface GigabitEthernet0/0/10
+interface GigabitEthernet 0/0/10
 shutdown
 quit
-interface GigabitEthernet0/0/11
+interface GigabitEthernet 0/0/11
 shutdown
 quit
-interface Ethernet0/0/1
+interface Ethernet 0/0/1
 shutdown
 quit
-interface Ethernet0/0/2
+interface Ethernet 0/0/2
 shutdown
 quit
-interface Ethernet0/0/3
+interface Ethernet 0/0/3
 shutdown
 quit
-interface Ethernet0/0/4
+interface Ethernet 0/0/4
 shutdown
 quit
-interface Ethernet0/0/5
+interface Ethernet 0/0/5
 shutdown
 quit
-interface Ethernet0/0/6
+interface Ethernet 0/0/6
 shutdown
 quit
-interface Ethernet0/0/7
+interface Ethernet 0/0/7
 shutdown
 quit
-interface Ethernet0/0/8
+interface Ethernet 0/0/8
 shutdown
 quit
-interface Ethernet0/0/9
+interface Ethernet 0/0/9
 shutdown
 quit
-interface Ethernet0/0/10
+interface Ethernet 0/0/10
 shutdown
 quit
-interface Ethernet0/0/11
+interface Ethernet 0/0/11
 shutdown
 quit
-interface Ethernet0/0/12
+interface Ethernet 0/0/12
 shutdown
 quit
-interface Ethernet0/0/13
+interface Ethernet 0/0/13
 shutdown
 quit
-interface Ethernet0/0/14
+interface Ethernet 0/0/14
 shutdown
 quit
-interface Ethernet0/0/15
+interface Ethernet 0/0/15
 shutdown
 quit
-interface Ethernet0/0/16
+interface Ethernet 0/0/16
 shutdown
 quit
-interface range Ethernet0/0/1 to Ethernet0/0/16
+interface range Ethernet 0/0/1 to Ethernet 0/0/16
 shutdown
 quit
 aaa

@@ -3,7 +3,7 @@ namespace VrpSim;
 public abstract record Tok;
 public sealed record Lit(string W, string Help = "") : Tok;
 public sealed record Val(string Name, string Hint, Func<Device, string, IEnumerable<Candidate>>? Sug = null, Func<string, bool>? Accept = null,
-    Func<Device, string, IReadOnlyDictionary<string, string>, IEnumerable<Candidate>>? CSug = null) : Tok;
+    Func<Device, string, IReadOnlyDictionary<string, string>, IEnumerable<Candidate>>? CSug = null, bool NoHint = false) : Tok;
 public sealed record Opt(params Tok[] Inner) : Tok;
 public sealed record Rep(Tok Inner, int Max = 64) : Tok;
 public sealed record Candidate(string Word, string Help);
@@ -143,7 +143,7 @@ public static class Cli
                 if (l.W.StartsWith(partial, StringComparison.OrdinalIgnoreCase)) outp.Add(new Candidate(l.W, l.Help));
                 break;
             case Val v:
-                if (help && partial.Length == 0) outp.Add(new Candidate(v.Hint, ""));
+                if (help && partial.Length == 0 && !v.NoHint) outp.Add(new Candidate(v.Hint, ""));
                 if (v.CSug != null)
                 {
                     foreach (var c in v.CSug(dev, partial, s.Caps))

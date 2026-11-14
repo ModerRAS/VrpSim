@@ -13,6 +13,7 @@ public static class CommandSets
         "lupp" => LuppView,
         "range" => IfaceView,
         "pg" => PgView,
+        "vlan" => VlanView,
         _ => UserView
     };
 
@@ -21,6 +22,14 @@ public static class CommandSets
         => new Command(kw, help) { Run = run };
 
     static string[] Err(string msg) => new[] { "Error: " + msg };
+
+    // 真机口径报错：先打 ^（指向第 tokIdx 个 token 起点），再打 Error 行
+    static string[] ErrAt(ExecCtx c, int tokIdx, string msg)
+    {
+        var off = 0;
+        for (var i = 0; i < tokIdx && i < c.Tokens.Count; i++) off += c.Tokens[i].Length + 1;
+        return new[] { new string(' ', c.S.Prompt().Length + off) + "^", "Error: " + msg };
+    }
 
     static bool IsInt(string s, out int v) => int.TryParse(s, out v);
 
@@ -77,6 +86,21 @@ public static class CommandSets
 
     // 接口编号只接受 "0/0/1" 这类数字/斜杠串，防止把 "to" 之类关键字吃成编号
     static bool IsIfNumToken(string t) => t.Length > 0 && t.All(ch => char.IsDigit(ch) || ch == '/');
+
+    static bool IsIfaceKindToken(string t) =>
+        new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" }.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
+
+    // 类型+编号连写（Ethernet0/0/1、GigabitEthernet0/0/1、Vlanif8）——真机输入不认
+    static bool IsConcatIfaceToken(string t)
+    {
+        foreach (var k in new[] { "Ethernet", "GigabitEthernet", "Vlanif" })
+        {
+            if (t.Length <= k.Length || !t.StartsWith(k, StringComparison.OrdinalIgnoreCase)) continue;
+            var ch = t[k.Length];
+            if (char.IsDigit(ch) || ch == '/') return true;
+        }
+        return false;
+    }
 
     // 完整接口名（Ethernet0/0/1 / Vlanif8）——必须带数字后缀
     static bool IsIfaceNameToken(string t) => Device.SplitIfaceName(t).Num >= 0;
@@ -137,6 +161,16 @@ public static class CommandSets
         foreach (var x in new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL0" })
             if (x.Equals(k, StringComparison.OrdinalIgnoreCase)) return x;
         return k;
+    }
+
+    // 完整接口名的大小写规范化：ethernet0/0/1 -> Ethernet0/0/1（真机拼写）
+    static string CanonIfaceName(string name)
+    {
+        var (prefix, num) = Device.SplitIfaceName(name);
+        if (num < 0) return CanonIfaceKind(name);
+        var i = 0;
+        while (i < prefix.Length && char.IsLetter(prefix[i])) i++;
+        return CanonIfaceKind(prefix.Substring(0, i)) + prefix.Substring(i) + num;
     }
 
     static readonly Val ValIf = new("if", "<interface>", IfSug);
@@ -264,6 +298,8 @@ public static class CommandSets
                 return d.Uis.TryGetValue(c.S.UiName, out var u) ? WrapThis(d.RenderUi(u)) : new List<string> { "Error: User interface not found." };
             case "lupp":
                 return LuppThis(d);
+            case "vlan":
+                return WrapThis(d.RenderVlan(c.S.VlanId));
             case "pg":
                 return WrapThis(d.RenderPortGroup(c.S.PgName,
                     d.PortGroups.TryGetValue(c.S.PgName, out var members) ? members : new List<string>()));
@@ -468,6 +504,7 @@ public static class CommandSets
                 return Array.Empty<string>();
             case "range":
             case "pg":
+            case "vlan":
                 s.View = "system";
                 return Array.Empty<string>();
             default:
@@ -512,17 +549,20 @@ public static class CommandSets
             .T(new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)), new Lit("name"), new Val("nm", "STRING<1-64>")),
         C("interface", "Enter interface view", EnterIface)
             .T(new Lit("range", "Set interface range"),
-                new Val("kind1", "<interface-type>", IfKindSug, IfKindAccept), new Val("num1", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind1")),
+                new Val("kind1", "<interface-type>", IfKindSug, IfKindAccept, null, true), new Val("num1", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind1")),
                 new Lit("to", "End of interface range"),
-                new Val("kind2", "<interface-type>", IfKindSug, IfKindAccept), new Val("num2", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind2")))
+                new Val("kind2", "<interface-type>", IfKindSug, IfKindAccept, null, true), new Val("num2", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind2")))
+            // 宽松模板：只为把"连写/漏写 to"等情况交给 EnterRange 按真机口径报错（合法写法由上面的拆分模板先命中）
             .T(new Lit("range", "Set interface range"),
-                new Val("if1", "<interface>", IfSug, IsIfaceNameToken), new Lit("to", "End of interface range"),
-                new Val("if2", "<interface>", IfSug, IsIfaceNameToken))
-            .T(new Val("kind", "<interface-type>", IfKindSug, IfKindAccept), new Val("num", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind")))
-            .T(new Val("if", "<interface>", IfSug)),
+                new Val("bad0", "<interface>", null, _ => true, null, true),
+                new Rep(new Val("badN", "<interface>", null, _ => true, null, true), 7))
+            .T(new Val("kind", "<interface-type>", IfKindSug, IfKindAccept, null, true), new Val("num", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind")))
+            .T(new Val("if", "<interface>", null, IsIfaceNameToken, null, true)),
         C("port-group", "Enter port group view", EnterPortGroup)
             .T(new Val("pg", "STRING<1-32>", (d, p) => d.PortGroups.Keys.OrderBy(k => k).Select(k => new Candidate(k, "")))),
-        C("vlan", "Create VLAN", VlanBatch).T(new Lit("batch"), new Rep(new Val("id", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _)))),
+        C("vlan", "Create VLAN and enter VLAN view", VlanRun)
+            .T(new Lit("batch", "Create VLANs in batches"), new Rep(new Val("id", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _))))
+            .T(new Val("id", "INTEGER<1-4094>", null, s => IsInt(s, out _))),
         C("rsa", "RSA key pair", RsaRun).T(new Lit("local-key-pair"), new Lit("create")),
         C("stelnet", "Enable SSH service", StelnetRun)
             .T(new Lit("server"), new Lit("enable"))
@@ -581,10 +621,13 @@ public static class CommandSets
         {
             return EnterRange(c);
         }
+        // 真机输入只接受"类型 + 编号"分开写；Ethernet0/0/1 / Vlanif8 这类连写直接按真机报错
+        if (c.Has("if") && !Eq(c.Cap("if"), "NULL0"))
+            return ErrAt(c, 1, "Wrong parameter found at '^' position.");
         var kind = CanonIfaceKind(c.Cap("kind"));
-        var name = c.Has("kind")
-            ? (Eq(kind, "NULL0") ? "NULL0" : kind + c.Cap("num"))
-            : c.Cap("if");
+        var name = c.Has("if")
+            ? "NULL0"
+            : (Eq(kind, "NULL0") ? "NULL0" : kind + c.Cap("num"));
         if (!c.Dev.Ifaces.ContainsKey(name))
         {
             if (name.StartsWith("Vlanif", StringComparison.OrdinalIgnoreCase) && IsInt(name.Substring(6), out var vlan))
@@ -601,17 +644,20 @@ public static class CommandSets
 
     static string[] EnterRange(ExecCtx c)
     {
-        string left, right;
-        if (c.Has("if1") && c.Has("if2"))
-        {
-            left = c.Cap("if1");
-            right = c.Cap("if2");
-        }
-        else
-        {
-            left = c.Cap("kind1") + c.Cap("num1");
-            right = c.Cap("kind2") + c.Cap("num2");
-        }
+        var t = c.Tokens;
+        // 类型+编号连写（Ethernet0/0/1 …）：真机不认，^ 指向该 token
+        for (var i = 1; i < t.Count; i++)
+            if (IsConcatIfaceToken(t[i])) return ErrAt(c, i, "Wrong parameter found at '^' position.");
+        // 合法写法只有：interface range <type> <num> to <type> <num>
+        if (t.Count != 7) return ErrAt(c, Math.Min(t.Count, 2), "Wrong parameter found at '^' position.");
+        if (!IsIfaceKindToken(t[2])) return ErrAt(c, 2, "Wrong parameter found at '^' position.");
+        if (!IsIfNumToken(t[3])) return ErrAt(c, 3, "Wrong parameter found at '^' position.");
+        if (!Eq(t[4], "to")) return ErrAt(c, 4, "Wrong parameter found at '^' position.");
+        if (!IsIfaceKindToken(t[5])) return ErrAt(c, 5, "Wrong parameter found at '^' position.");
+        if (!IsIfNumToken(t[6])) return ErrAt(c, 6, "Wrong parameter found at '^' position.");
+        // 类型大小写不敏感、两端可混用；拼成规范名再查表（字典是大小写敏感的）
+        string left = CanonIfaceKind(t[2]) + t[3];
+        string right = CanonIfaceKind(t[5]) + t[6];
         var (p1, n1) = Device.SplitIfaceName(left);
         var (p2, n2) = Device.SplitIfaceName(right);
         if (!p1.Equals(p2, StringComparison.OrdinalIgnoreCase) || n1 < 0 || n2 < 0 || n1 > n2 || n2 - n1 + 1 > 64)
@@ -642,6 +688,18 @@ public static class CommandSets
         var ids = c.Tokens.Skip(2).Select(x => IsInt(x, out var v) ? v : -1).Where(v => v > 0 && v <= 4094).ToList();
         if (ids.Count == 0) return Err("Wrong parameter found at '^' position.");
         foreach (var v in ids) c.Dev.Vlans.Add(v);
+        return Array.Empty<string>();
+    }
+
+    static string[] VlanRun(ExecCtx c)
+    {
+        if (c.Tokens.Count > 1 && Eq(c.Tokens[1], "batch")) return VlanBatch(c);
+        if (!IsInt(c.Cap("id"), out var id) || id < 1 || id > 4094)
+            return ErrAt(c, 1, "Wrong parameter found at '^' position.");
+        // 已存在则直接进视图，不存在则创建再进（真机行为）
+        c.Dev.Vlans.Add(id);
+        c.S.VlanId = id;
+        c.S.View = "vlan";
         return Array.Empty<string>();
     }
 
@@ -782,7 +840,8 @@ public static class CommandSets
         u.T(new Lit("snmp-agent"), new Lit("community"), new Opt(new Val("dir", "<read|write>", (d, p) => SugOf(new[] { "read", "write" }, p))));
         u.T(new Lit("snmp-agent"), new Lit("sys-info"), new Lit("version"));
         u.T(new Lit("snmp-agent"), new Lit("target-host"), new Lit("trap"), new Lit("address"), new Lit("udp-domain"), ValIp);
-        u.T(new Lit("vlan"), new Lit("batch"), new Rep(new Val("id", "<vlan-id>")));
+        u.T(new Lit("vlan"), new Val("id", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _)));
+        u.T(new Lit("vlan"), new Lit("batch"), new Rep(new Val("id", "INTEGER<1-4094>")));
         return u;
     }
 
@@ -820,12 +879,26 @@ public static class CommandSets
             d.Targets.RemoveAll(x => x.Ip == c.Cap("ip"));
             return Array.Empty<string>();
         }
+        if (t.Count == 3 && Eq(t[1], "vlan") && IsInt(t[2], out var vidSingle))
+        {
+            if (vidSingle == 1) return Err("The default VLAN cannot be deleted.");
+            if (!d.Vlans.Contains(vidSingle)) return Err("The VLAN does not exist.");
+            RemoveVlan(d, vidSingle);
+            return Array.Empty<string>();
+        }
         if (t.Count > 2 && Eq(t[1], "vlan") && Eq(t[2], "batch"))
         {
-            foreach (var x in t.Skip(3)) if (IsInt(x, out var v) && v != 1) d.Vlans.Remove(v);
+            foreach (var x in t.Skip(3)) if (IsInt(x, out var v) && v != 1) RemoveVlan(d, v);
             return Array.Empty<string>();
         }
         return Err("Unrecognized command found at '^' position.");
+    }
+
+    static void RemoveVlan(Device d, int id)
+    {
+        d.Vlans.Remove(id);
+        d.VlanCfgs.Remove(id);
+        d.Ifaces.Remove($"Vlanif{id}");
     }
 
     // ---------------- AAA view ----------------
@@ -1243,11 +1316,11 @@ public static class CommandSets
             members = new List<string>();
             d.PortGroups[c.S.PgName] = members;
         }
-        var name = c.Cap("if");
+        var name = CanonIfaceName(c.Cap("if"));
         if (!d.Ifaces.ContainsKey(name)) return Err("Wrong parameter found at '^' position.");
         if (c.Has("if2"))
         {
-            var name2 = c.Cap("if2");
+            var name2 = CanonIfaceName(c.Cap("if2"));
             if (!d.Ifaces.ContainsKey(name2)) return Err("Wrong parameter found at '^' position.");
             var (p1, n1) = Device.SplitIfaceName(name);
             var (p2, n2) = Device.SplitIfaceName(name2);
@@ -1269,11 +1342,55 @@ public static class CommandSets
         if (t.Count > 1 && Eq(t[1], "group-member"))
         {
             if (!c.Dev.PortGroups.TryGetValue(c.S.PgName, out var members)) return Array.Empty<string>();
-            if (c.Has("if")) members.Remove(c.Cap("if"));
+            if (c.Has("if")) members.Remove(CanonIfaceName(c.Cap("if")));
             else members.Clear();
             return Array.Empty<string>();
         }
         return IfaceUndo(c);
+    }
+
+    // ---------------- VLAN 视图（vlan <id> 进入） ----------------
+    static readonly Command UndoVlanViewCmd = BuildUndoVlanView();
+
+    static readonly List<Command> VlanView = new()
+    {
+        C("description", "VLAN description", c => { GetVlanCfg(c).Description = JoinText(c); return Array.Empty<string>(); })
+            .T(new Rep(new Val("w", "<text>"))),
+        C("name", "VLAN name", c => { GetVlanCfg(c).Name = string.Join(" ", c.Tokens.Skip(1)); return Array.Empty<string>(); })
+            .T(new Val("nm", "STRING<1-32>")),
+        UndoVlanViewCmd,
+        Nav("quit", "Exit current view", QuitRun),
+        Nav("return", "Return to user view", ReturnRun),
+        DisplayCmd, SaveCmd, CheckCmd
+    };
+
+    static Command BuildUndoVlanView()
+    {
+        var u = new Command("undo", "Negate a command or set its defaults") { Run = VlanViewUndo };
+        u.T(new Lit("description"));
+        u.T(new Lit("name"));
+        return u;
+    }
+
+    static VlanCfg GetVlanCfg(ExecCtx c)
+    {
+        if (!c.Dev.VlanCfgs.TryGetValue(c.S.VlanId, out var cfg))
+        {
+            cfg = new VlanCfg { Id = c.S.VlanId };
+            c.Dev.VlanCfgs[c.S.VlanId] = cfg;
+        }
+        return cfg;
+    }
+
+    static string JoinText(ExecCtx c) => string.Join(" ", c.Tokens.Skip(1));
+
+    static string[] VlanViewUndo(ExecCtx c)
+    {
+        var t = c.Tokens.Select(x => x.ToLowerInvariant()).ToList();
+        if (!c.Dev.VlanCfgs.TryGetValue(c.S.VlanId, out var cfg)) return Array.Empty<string>();
+        if (t.Count > 1 && Eq(t[1], "description")) { cfg.Description = null; return Array.Empty<string>(); }
+        if (t.Count > 1 && Eq(t[1], "name")) { cfg.Name = null; return Array.Empty<string>(); }
+        return Err("Unrecognized command found at '^' position.");
     }
 
 

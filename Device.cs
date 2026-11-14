@@ -60,6 +60,14 @@ public sealed class Iface
         || TrunkVlans.Count > 0 || TfIn != null || TfOut != null;
 }
 
+public sealed class VlanCfg
+{
+    public int Id;
+    public string? Description;
+    public string? Name;
+    public bool HasConfig => !string.IsNullOrEmpty(Description) || !string.IsNullOrEmpty(Name);
+}
+
 public sealed class SnmpCommunity
 {
     public bool Read = true;
@@ -103,6 +111,7 @@ public sealed class Device
     public bool InfoCenterEnabled = true;
     public string MonitorIp = "192.168.12.1";
     public HashSet<int> Vlans = new();
+    public Dictionary<int, VlanCfg> VlanCfgs = new();
     public Dictionary<int, Acl> Acls = new();
     public Dictionary<string, Iface> Ifaces = new();
     public Dictionary<string, LocalUser> Users = new();
@@ -183,10 +192,10 @@ public sealed class Device
             foreach (var h in LogHosts) L.Add($"info-center loghost {h}");
             Sep();
         }
-        var extra = Vlans.Where(v => v != 1).OrderBy(v => v).ToList();
-        if (extra.Count > 0)
+        var plainVlans = Vlans.Where(v => v != 1 && !HasVlanCfg(v)).OrderBy(v => v).ToList();
+        if (plainVlans.Count > 0)
         {
-            L.Add("vlan batch " + string.Join(" ", extra));
+            L.Add("vlan batch " + CompressVlanRuns(plainVlans));
             Sep();
         }
         foreach (var p in FactoryAuthProfiles) L.Add($"authentication-profile name {p}");
@@ -219,6 +228,11 @@ public sealed class Device
             if (i.TfOut is int tout) L.Add($" traffic-filter outbound acl {tout}");
             if (i.Ip != null) L.Add($" ip address {i.Ip} {i.Mask}");
             if (i.Shutdown) L.Add(" shutdown");
+            Sep();
+        }
+        foreach (var v in Vlans.Where(x => x != 1 && HasVlanCfg(x)).OrderBy(x => x))
+        {
+            L.AddRange(RenderVlan(v));
             Sep();
         }
         foreach (var pg in PortGroups.OrderBy(k => k.Key))
@@ -284,6 +298,35 @@ public sealed class Device
                 L.Add($" local-user {u.Name} service-type {string.Join(" ", u.ServiceTypes)}");
         }
         return L;
+    }
+
+    public bool HasVlanCfg(int id) => VlanCfgs.TryGetValue(id, out var c) && c.HasConfig;
+
+    public List<string> RenderVlan(int id)
+    {
+        var L = new List<string> { $"vlan {id}" };
+        if (VlanCfgs.TryGetValue(id, out var cfg))
+        {
+            if (!string.IsNullOrEmpty(cfg.Description)) L.Add($" description {cfg.Description}");
+            if (!string.IsNullOrEmpty(cfg.Name)) L.Add($" name {cfg.Name}");
+        }
+        return L;
+    }
+
+    // VLAN 号连续段压缩成 "A to B"（真机 display current-configuration 写法）
+    public static string CompressVlanRuns(List<int> ids)
+    {
+        var parts = new List<string>();
+        var i = 0;
+        while (i < ids.Count)
+        {
+            var j = i + 1;
+            while (j < ids.Count && ids[j] == ids[j - 1] + 1) j++;
+            if (j - i >= 2) parts.Add(ids[i] + " to " + ids[j - 1]);
+            else parts.Add(ids[i].ToString());
+            i = j;
+        }
+        return string.Join(" ", parts);
     }
 
     public List<string> RenderPortGroup(string name, List<string> members)
@@ -368,6 +411,7 @@ public sealed class Session
     public string IfName = "GigabitEthernet0/0/1";
     public string UiName = "con 0";
     public string PgName = "";
+    public int VlanId;
     public List<string> RangeIfaces = new();
     public bool ExitRequested;
     public bool Saved;
@@ -385,6 +429,7 @@ public sealed class Session
         "lupp" => $"[{Dev.SysName}-aaa-lupp-admin]",
         "range" => $"[{Dev.SysName}-port-group]",
         "pg" => $"[{Dev.SysName}-port-group-{PgName}]",
+        "vlan" => $"[{Dev.SysName}-vlan{VlanId}]",
         _ => $"[{Dev.SysName}]"
     };
 
