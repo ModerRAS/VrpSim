@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v1.0.0, must exist)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: publish self-contained win-x64 single file
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        run: |
+          $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG } else { $env:GITHUB_REF_NAME }
+          if ($tag -notmatch '^v') { throw "tag '$tag' does not start with 'v'" }
+          "TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "releasing tag: $tag"
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish (self-contained single-file win-x64)
+        run: |
+          dotnet publish VrpSim.csproj -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -p:DebugType=None `
+            -o out --nologo
+
+      - name: Selftest published exe
+        run: |
+          $out = (& 'out/VrpSim.exe' --selftest 2>&1 | Out-String)
+          $code = $LASTEXITCODE
+          $out | Write-Host
+          if ($code -ne 0) { throw "published exe selftest failed: exit code $code" }
+          if ($out -notmatch 'SELFTEST OK') { throw "published exe selftest output does not contain 'SELFTEST OK'" }
+          Write-Host 'published exe selftest OK'
+
+      - name: Write SHA-256 checksum
+        run: |
+          $exe = Resolve-Path 'out/VrpSim.exe'
+          $size = (Get-Item -LiteralPath $exe).Length
+          $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLower()
+          $line = "$hash  VrpSim.exe`n"
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location).Path 'out/VrpSim.exe.sha256'), $line, [System.Text.UTF8Encoding]::new($false))
+          Write-Host "VrpSim.exe = $size bytes, sha256 = $hash"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $tag = $env:TAG
+          gh release create $tag 'out/VrpSim.exe' 'out/VrpSim.exe.sha256' --verify-tag --title "VrpSim $tag" --generate-notes
+          gh release view $tag --json url,tagName,assets --jq '{url: .url, tag: .tagName, assets: [.assets[] | {name: .name, size: .size}]}'

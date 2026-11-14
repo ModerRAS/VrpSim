@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: build + selftest + drill + completion smoke
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Show SDK version
+        run: dotnet --version
+
+      # --- A. build, warnings are errors ---
+      - name: Build (warnings as errors)
+        run: dotnet build -c Release --nologo -warnaserror
+
+      # --- B. self test ---
+      - name: Selftest (--selftest)
+        run: |
+          $out = dotnet run -c Release --no-build -- --selftest 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          $out | Write-Host
+          if ($code -ne 0) { throw "selftest failed: exit code $code" }
+          if ($out -notmatch 'SELFTEST OK') { throw "selftest output does not contain 'SELFTEST OK'" }
+          Write-Host 'selftest OK: exit 0, SELFTEST OK'
+
+      # --- C. hardening drill regression: 演练脚本-14项.txt must produce zero errors ---
+      - name: Drill regression (演练脚本-14项.txt)
+        run: |
+          chcp 65001 | Out-Null
+          $root = (Get-Location).Path
+          $exe = Join-Path $root 'bin/Release/net10.0/VrpSim.exe'
+          $in = Join-Path $root 'drill-cmds.txt'
+          $log = Join-Path $root 'drill.log'
+          Copy-Item -LiteralPath '演练脚本-14项.txt' -Destination $in -Force
+          $cmdline = '""' + $exe + '" --batch --no-login < "' + $in + '" > "' + $log + '" 2>&1"'
+          cmd.exe /d /c $cmdline
+          $code = $LASTEXITCODE
+          $bytes = [System.IO.File]::ReadAllBytes($log)
+          $text = [System.Text.UTF8Encoding]::new($false, $false).GetString($bytes)
+          if ($text.IndexOf([char]0xFFFD) -ge 0) {
+            try { $null = [System.Text.Encoding]::GetEncoding(936) } catch {
+              [System.Text.Encoding]::RegisterProvider([System.Text.CodePagesEncodingProvider]::Instance)
+            }
+            $text = [System.Text.Encoding]::GetEncoding(936).GetString($bytes)
+          }
+          Write-Host $text
+          if ($code -ne 0) { throw "drill failed: exit code $code" }
+          $errLines = @($text -split "`r?`n" | Where-Object { $_ -match '^Error' })
+          if ($errLines.Count -gt 0) {
+            throw ('drill output contains ' + $errLines.Count + ' line(s) starting with Error: ' + ($errLines -join ' || '))
+          }
+          if ($text -notmatch '通过 11，未通过 0') { throw "drill output does not contain the final check summary '通过 11，未通过 0'" }
+          Write-Host 'drill OK: exit 0, no Error lines, final check 11/11'
+
+      # --- D. completion smoke (--complete) ---
+      - name: Completion smoke (--complete)
+        run: |
+          $root = (Get-Location).Path
+          $exe = Join-Path $root 'bin/Release/net10.0/VrpSim.exe'
+          $cases = @(
+            @{ view = 'system'; text = 'snmp-agent comm'; expect = 'snmp-agent community' },
+            @{ view = 'system'; text = 'interface '; expect = 'interface GigabitEthernet' },
+            @{ view = 'system'; text = 'acl '; expect = 'acl number' },
+            @{ view = 'aaa'; text = 'local-user '; expect = 'local-user admin' }
+          )
+          foreach ($c in $cases) {
+            $out = (& $exe --view $c.view --complete $c.text 2>&1 | Out-String)
+            $code = $LASTEXITCODE
+            if ($code -ne 0) { throw ('complete [' + $c.view + '] "' + $c.text + '" exit code ' + $code) }
+            if ($out -notmatch [regex]::Escape($c.expect)) {
+              throw ('complete [' + $c.view + '] "' + $c.text + '" output does not contain "' + $c.expect + '": ' + $out)
+            }
+            Write-Host ('complete OK [' + $c.view + '] ' + $c.text + ' -> ' + $c.expect)
+          }
+
+      - name: Upload drill log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-drill-log
+          path: drill.log
+          if-no-files-found: ignore

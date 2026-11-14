@@ -1,5 +1,7 @@
 # 华为 VRP 交换机模拟终端（加固演练用）
 
+[![CI](https://github.com/ModerRAS/VrpSim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ModerRAS/VrpSim/actions/workflows/ci.yml)
+
 按 2026-11-12 / 11-13 两台现场配置（V200R011C10SPC600）写的**可交互 CLI 模拟器**：
 Tab 补全、`?` 帮助、缩写执行、视图切换、`display current-configuration` / `display this` 还原、
 `interface range` 批量配置、`port-group` 端口组、外加 14 项加固自查评分。
