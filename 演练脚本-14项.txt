@@ -1,0 +1,164 @@
+system-view
+sysname SW-JF-01
+vlan batch 8
+interface Vlanif8
+ip address 192.168.12.4 255.255.255.0
+description GuanLi-WangAn
+quit
+acl number 2000
+description Manager
+rule 5 permit source 192.168.12.15 0
+rule 10 deny
+quit
+acl number 2001
+description WangJian
+rule 5 permit source 192.168.12.1 0
+rule 10 deny
+quit
+acl number 3000
+description Normal
+rule 5 deny tcp destination-port eq 135
+rule 10 deny tcp destination-port range 137 139
+rule 15 deny tcp destination-port eq 445
+rule 20 deny tcp destination-port eq 3389
+rule 25 deny udp destination-port range 137 139
+rule 30 deny udp destination-port eq 135
+rule 35 deny udp destination-port eq 445
+rule 40 deny udp destination-port eq 3389
+rule 45 permit ip
+quit
+interface GigabitEthernet0/0/1
+port link-type access
+port default vlan 8
+traffic-filter inbound acl 3000
+traffic-filter outbound acl 3000
+undo shutdown
+quit
+interface GigabitEthernet0/0/12
+port link-type trunk
+port trunk allow-pass vlan 8
+traffic-filter inbound acl 3000
+traffic-filter outbound acl 3000
+undo shutdown
+quit
+interface GigabitEthernet0/0/2
+shutdown
+quit
+interface GigabitEthernet0/0/3
+shutdown
+quit
+interface GigabitEthernet0/0/4
+shutdown
+quit
+interface GigabitEthernet0/0/5
+shutdown
+quit
+interface GigabitEthernet0/0/6
+shutdown
+quit
+interface GigabitEthernet0/0/7
+shutdown
+quit
+interface GigabitEthernet0/0/8
+shutdown
+quit
+interface GigabitEthernet0/0/9
+shutdown
+quit
+interface GigabitEthernet0/0/10
+shutdown
+quit
+interface GigabitEthernet0/0/11
+shutdown
+quit
+interface Ethernet0/0/1
+shutdown
+quit
+interface Ethernet0/0/2
+shutdown
+quit
+interface Ethernet0/0/3
+shutdown
+quit
+interface Ethernet0/0/4
+shutdown
+quit
+interface Ethernet0/0/5
+shutdown
+quit
+interface Ethernet0/0/6
+shutdown
+quit
+interface Ethernet0/0/7
+shutdown
+quit
+interface Ethernet0/0/8
+shutdown
+quit
+interface Ethernet0/0/9
+shutdown
+quit
+interface Ethernet0/0/10
+shutdown
+quit
+interface Ethernet0/0/11
+shutdown
+quit
+interface Ethernet0/0/12
+shutdown
+quit
+interface Ethernet0/0/13
+shutdown
+quit
+interface Ethernet0/0/14
+shutdown
+quit
+interface Ethernet0/0/15
+shutdown
+quit
+interface Ethernet0/0/16
+shutdown
+quit
+interface range Ethernet0/0/1 to Ethernet0/0/16
+shutdown
+quit
+aaa
+local-aaa-user wrong-password retry-interval 5 retry-time 5 block-time 10
+user-password complexity-check
+local-aaa-user password policy administrator
+quit
+local-user opsadmin password irreversible-cipher Str0ng@Pass1
+local-user opsadmin privilege level 15
+local-user opsadmin service-type terminal ssh
+undo local-user admin
+quit
+user-interface con 0
+authentication-mode aaa
+idle-timeout 5 0
+quit
+user-interface vty 0 4
+acl 2000 inbound
+authentication-mode aaa
+protocol inbound ssh
+idle-timeout 5 0
+quit
+user-interface vty 16 20
+acl 2000 inbound
+authentication-mode aaa
+protocol inbound ssh
+idle-timeout 5 0
+quit
+snmp-agent community read cipher Public@123 acl 2001
+snmp-agent sys-info version v2c v3
+snmp-agent target-host trap address udp-domain 192.168.12.1 params securityname cipher Public@123 v2c
+snmp-agent trap enable
+info-center loghost 192.168.12.1
+undo telnet server enable
+undo ftp server
+undo http server enable
+stelnet server enable
+clock timezone BeiJin add 08:00:00
+clock datetime 14:30:00 2026-11-14
+return
+save
+check
