@@ -2,7 +2,8 @@ namespace VrpSim;
 
 public abstract record Tok;
 public sealed record Lit(string W, string Help = "") : Tok;
-public sealed record Val(string Name, string Hint, Func<Device, string, IEnumerable<Candidate>>? Sug = null, Func<string, bool>? Accept = null) : Tok;
+public sealed record Val(string Name, string Hint, Func<Device, string, IEnumerable<Candidate>>? Sug = null, Func<string, bool>? Accept = null,
+    Func<Device, string, IReadOnlyDictionary<string, string>, IEnumerable<Candidate>>? CSug = null) : Tok;
 public sealed record Opt(params Tok[] Inner) : Tok;
 public sealed record Rep(Tok Inner, int Max = 64) : Tok;
 public sealed record Candidate(string Word, string Help);
@@ -106,11 +107,23 @@ public static class Cli
         var res = new List<State>();
         foreach (var s in states)
         {
-            var key = string.Join(" ", s.Seq.Select(x => x.ToString())) + "|" + s.Stack.Count + "|" + s.Pos + "|" + string.Join(",", s.Caps.Keys.OrderBy(k => k));
+            var key = string.Join(" ", s.Seq.Select(TokKey)) + "|" + s.Stack.Count + "|" + s.Pos + "|" +
+                      string.Join(",", s.Caps.OrderBy(k => k.Key).Select(kv => kv.Key + "=" + kv.Value)) + "|" +
+                      string.Join(",", s.Lits.OrderBy(k => k.Key).Select(kv => kv.Key + "=" + kv.Value));
             if (seen.Add(key)) res.Add(s);
         }
         return res;
     }
+
+    // 结构化 key：两个只剩 Opt/Rep 内部关键字不同的模板不能被误判成同一状态
+    static string TokKey(Tok t) => t switch
+    {
+        Lit l => "L:" + l.W,
+        Val v => "V:" + v.Name,
+        Opt o => "O(" + string.Join(",", o.Inner.Select(TokKey)) + ")",
+        Rep r => "R(" + TokKey(r.Inner) + ")",
+        _ => "?"
+    };
 
     static void Next(Device dev, State s, string partial, bool help, List<Candidate> outp, int depth)
     {
@@ -131,7 +144,12 @@ public static class Cli
                 break;
             case Val v:
                 if (help && partial.Length == 0) outp.Add(new Candidate(v.Hint, ""));
-                if (v.Sug != null)
+                if (v.CSug != null)
+                {
+                    foreach (var c in v.CSug(dev, partial, s.Caps))
+                        if (c.Word.StartsWith(partial, StringComparison.OrdinalIgnoreCase)) outp.Add(c);
+                }
+                else if (v.Sug != null)
                 {
                     foreach (var c in v.Sug(dev, partial))
                         if (c.Word.StartsWith(partial, StringComparison.OrdinalIgnoreCase)) outp.Add(c);

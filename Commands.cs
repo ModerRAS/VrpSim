@@ -75,6 +75,51 @@ public static class CommandSets
             .Select(x => new Candidate(x, ""));
     }
 
+    // 接口编号只接受 "0/0/1" 这类数字/斜杠串，防止把 "to" 之类关键字吃成编号
+    static bool IsIfNumToken(string t) => t.Length > 0 && t.All(ch => char.IsDigit(ch) || ch == '/');
+
+    // 完整接口名（Ethernet0/0/1 / Vlanif8）——必须带数字后缀
+    static bool IsIfaceNameToken(string t) => Device.SplitIfaceName(t).Num >= 0;
+
+    // 按已选接口类型给编号候选：Vlanif -> VLAN 号；物理口 -> 已存在编号（真机 Tab 口径）
+    static Func<Device, string, IReadOnlyDictionary<string, string>, IEnumerable<Candidate>> IfNumCtx(string capKey) =>
+        (d, p, caps) =>
+        {
+            var kind = caps.TryGetValue(capKey, out var k) ? k : "";
+            return IfNumFor(d, kind);
+        };
+
+    static IEnumerable<Candidate> IfNumFor(Device d, string kind)
+    {
+        if (kind.Length == 0) return Array.Empty<Candidate>();
+        if ("Vlanif".StartsWith(kind, StringComparison.OrdinalIgnoreCase) || kind.StartsWith("Vlanif", StringComparison.OrdinalIgnoreCase))
+            return d.Vlans.OrderBy(v => v).Select(v => new Candidate(v.ToString(), ""));
+        var prefix = new[] { "Ethernet", "GigabitEthernet" }
+            .FirstOrDefault(k => k.StartsWith(kind, StringComparison.OrdinalIgnoreCase) || kind.StartsWith(k, StringComparison.OrdinalIgnoreCase));
+        if (prefix == null) return Array.Empty<Candidate>();
+        return d.Ifaces.Keys
+            .Where(n => n.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Select(n => n.Substring(prefix.Length))
+            .Distinct().OrderBy(x => x.Length).ThenBy(x => x)
+            .Select(x => new Candidate(x, ""));
+    }
+
+    // 端口号/常用端口名候选（destination-port eq/range/lt/gt）
+    static IEnumerable<Candidate> PortSug(Device d, string p)
+    {
+        var list = new (string W, string H)[]
+        {
+            ("135", "MS RPC"), ("137", "NetBIOS name service"), ("138", "NetBIOS datagram service"),
+            ("139", "NetBIOS session service"), ("445", "Microsoft-DS"), ("3389", "Remote desktop"),
+            ("ftp", "File Transfer Protocol (21)"), ("ssh", "Secure Shell (22)"), ("telnet", "Telnet (23)"),
+            ("http", "Hypertext Transfer Protocol (80)"), ("https", "HTTPS (443)"), ("domain", "Domain Name Server (53)"),
+            ("snmp", "Simple Network Management Protocol (161)"), ("snmptrap", "SNMP Trap (162)"),
+            ("netbios-ns", "NetBIOS name service (137)"), ("netbios-dgm", "NetBIOS datagram service (138)"),
+            ("netbios-ssn", "NetBIOS session service (139)")
+        };
+        return list.Where(x => x.W.StartsWith(p, StringComparison.OrdinalIgnoreCase)).Select(x => new Candidate(x.W, x.H));
+    }
+
     static IEnumerable<Candidate> UserSug(Device d, string p) =>
         d.Users.Keys.OrderBy(k => k).Select(k => new Candidate(k, ""));
 
@@ -96,7 +141,21 @@ public static class CommandSets
 
     static readonly Val ValIf = new("if", "<interface>", IfSug);
     static readonly Val ValIp = new("ip", "<X.X.X.X>");
-    static readonly Val ValUser = new("name", "<user-name>", UserSug);
+    static readonly Val ValUser = new("name", "STRING<1-63>", UserSug);
+
+    static readonly Func<Device, string, IEnumerable<Candidate>> SugPermitDeny = (d, p) => SugOf(new[] { "permit", "deny" }, p);
+    static readonly Func<Device, string, IEnumerable<Candidate>> SugTcpUdp = (d, p) => SugOf(new[] { "tcp", "udp" }, p);
+    static readonly Func<Device, string, IEnumerable<Candidate>> SugCipherMode = (d, p) => SugOf(new[] { "cipher", "irreversible-cipher" }, p);
+    static readonly Func<Device, string, IEnumerable<Candidate>> SugServices = (d, p) => SugOf(new[] { "terminal", "ssh", "telnet", "ftp", "http" }, p);
+    static readonly Val ValAclAction = new("action", "{permit|deny}", SugPermitDeny,
+        t => t.Equals("permit", StringComparison.OrdinalIgnoreCase) || t.Equals("deny", StringComparison.OrdinalIgnoreCase));
+    static readonly Val ValProto = new("proto", "{tcp|udp}", SugTcpUdp,
+        t => t.Equals("tcp", StringComparison.OrdinalIgnoreCase) || t.Equals("udp", StringComparison.OrdinalIgnoreCase));
+    static readonly Val ValAclId = new("id", "INTEGER<1-65535>", null, s => IsInt(s, out _));
+    static readonly Val ValPort = new("port", "INTEGER<0-65535>", PortSug, s => IsInt(s, out _));
+    static readonly Val ValWildcard = new("wc", "<wildcard>",
+        (d, p) => new[] { new Candidate("0", "Wildcard bits : 0.0.0.0 (a host)"), new Candidate("X.X.X.X", "Wildcard of source") },
+        s => IsInt(s, out _) || IsIp(s));
 
     // ---------------- display ----------------
     static readonly Command DisplayCmd = BuildDisplay();
@@ -113,7 +172,7 @@ public static class CommandSets
         c.T(new Lit("interface", "Interface information"), new Lit("brief", "Brief interface information"));
         c.T(new Lit("acl", "ACL information"));
         c.T(new Lit("acl", "ACL information"), new Lit("all", "All ACLs"));
-        c.T(new Lit("acl", "ACL information"), new Val("aclno", "<2000-3999>", AclSug, s => IsInt(s, out _)));
+        c.T(new Lit("acl", "ACL information"), new Val("aclno", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)));
         c.T(new Lit("telnet", "Telnet service"), new Lit("server", "Telnet server"), new Lit("status", "Service status"));
         c.T(new Lit("ftp", "FTP service"), new Lit("server", "FTP server"));
         c.T(new Lit("http", "HTTP service"), new Lit("server", "HTTP server"));
@@ -444,20 +503,26 @@ public static class CommandSets
     static readonly List<Command> SystemView = new()
     {
         C("sysname", "Set the system name", c => { c.Dev.SysName = c.Cap("name"); return Array.Empty<string>(); })
-            .T(new Val("name", "<name>")),
+            .T(new Val("name", "STRING<1-246>")),
         C("aaa", "Enter AAA view", c => { c.S.View = "aaa"; return Array.Empty<string>(); }).T(),
         C("acl", "Enter ACL view", EnterAcl)
-            .T(new Lit("number"), new Val("num", "<2000-3999>"))
-            .T(new Lit("number"), new Val("num", "<2000-3999>"), new Lit("name"), new Val("nm", "<name>"))
-            .T(new Val("num", "<2000-3999>"))
-            .T(new Val("num", "<2000-3999>"), new Lit("name"), new Val("nm", "<name>")),
+            .T(new Lit("number", "ACL number"), new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)))
+            .T(new Lit("number", "ACL number"), new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)), new Lit("name"), new Val("nm", "STRING<1-64>"))
+            .T(new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)))
+            .T(new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)), new Lit("name"), new Val("nm", "STRING<1-64>")),
         C("interface", "Enter interface view", EnterIface)
-            .T(new Lit("range", "Set interface range"), new Rep(new Val("rw", "<interface1> to <interface2>")))
-            .T(new Val("kind", "<interface-type>", IfKindSug, IfKindAccept), new Val("num", "<interface-number>", IfNumSug))
+            .T(new Lit("range", "Set interface range"),
+                new Val("kind1", "<interface-type>", IfKindSug, IfKindAccept), new Val("num1", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind1")),
+                new Lit("to", "End of interface range"),
+                new Val("kind2", "<interface-type>", IfKindSug, IfKindAccept), new Val("num2", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind2")))
+            .T(new Lit("range", "Set interface range"),
+                new Val("if1", "<interface>", IfSug, IsIfaceNameToken), new Lit("to", "End of interface range"),
+                new Val("if2", "<interface>", IfSug, IsIfaceNameToken))
+            .T(new Val("kind", "<interface-type>", IfKindSug, IfKindAccept), new Val("num", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind")))
             .T(new Val("if", "<interface>", IfSug)),
         C("port-group", "Enter port group view", EnterPortGroup)
-            .T(new Val("pg", "<port-group-name>", (d, p) => d.PortGroups.Keys.OrderBy(k => k).Select(k => new Candidate(k, "")))),
-        C("vlan", "Create VLAN", VlanBatch).T(new Lit("batch"), new Rep(new Val("id", "<vlan-id>"))),
+            .T(new Val("pg", "STRING<1-32>", (d, p) => d.PortGroups.Keys.OrderBy(k => k).Select(k => new Candidate(k, "")))),
+        C("vlan", "Create VLAN", VlanBatch).T(new Lit("batch"), new Rep(new Val("id", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _)))),
         C("rsa", "RSA key pair", RsaRun).T(new Lit("local-key-pair"), new Lit("create")),
         C("stelnet", "Enable SSH service", StelnetRun)
             .T(new Lit("server"), new Lit("enable"))
@@ -469,24 +534,32 @@ public static class CommandSets
             .T(new Lit("user"), ValUser, new Lit("service-type"), new Val("t", "<service-type>")),
         C("snmp-agent", "SNMP agent", SnmpRun)
             .T()
-            .T(new Lit("community"), new Val("dir", "<read|write>", (d, p) => SugOf(new[] { "read", "write" }, p)),
-                new Opt(new Lit("cipher")), new Val("pw", "<community>"),
-                new Opt(new Lit("acl"), new Val("aclnum", "<2000-3999>", AclSug)))
-            .T(new Lit("sys-info"), new Lit("version"), new Rep(new Val("ver", "<v1|v2c|v3|all>", (d, p) => SugOf(new[] { "v1", "v2c", "v3", "all" }, p))))
+            .T(new Lit("community"), new Val("dir", "{read|write}", (d, p) => SugOf(new[] { "read", "write" }, p)),
+                new Opt(new Lit("cipher", "Cipher text")), new Val("pw", "STRING<1-32>"),
+                new Opt(new Lit("acl"), new Val("aclnum", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _))))
+            .T(new Lit("community"), new Val("dir", "{read|write}", (d, p) => SugOf(new[] { "read", "write" }, p)),
+                new Opt(new Lit("simple", "Plain text")), new Val("pw", "STRING<1-32>"),
+                new Opt(new Lit("acl"), new Val("aclnum", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _))))
+            .T(new Lit("sys-info"), new Lit("version"), new Rep(new Val("ver", "{v1|v2c|v3|all}", (d, p) => SugOf(new[] { "v1", "v2c", "v3", "all" }, p))))
             .T(new Lit("target-host"), new Lit("trap"), new Lit("address"), new Lit("udp-domain"), ValIp,
-                new Opt(new Lit("udp-port"), new Val("port", "<1-65535>")),
-                new Lit("params"), new Lit("securityname"), new Opt(new Lit("cipher")), new Val("sec", "<community>"),
-                new Opt(new Val("ver", "<v2c|v3>", (d, p) => SugOf(new[] { "v2c", "v3" }, p))))
+                new Opt(new Lit("udp-port"), new Val("port", "INTEGER<1-65535>", null, s => IsInt(s, out _))),
+                new Lit("params"), new Lit("securityname"), new Opt(new Lit("cipher", "Cipher text")), new Val("sec", "STRING<1-32>"),
+                new Opt(new Val("ver", "{v2c|v3}", (d, p) => SugOf(new[] { "v2c", "v3" }, p))))
+            .T(new Lit("target-host"), new Lit("trap"), new Lit("address"), new Lit("udp-domain"), ValIp,
+                new Opt(new Lit("udp-port"), new Val("port", "INTEGER<1-65535>", null, s => IsInt(s, out _))),
+                new Lit("params"), new Lit("securityname"), new Opt(new Lit("simple", "Plain text")), new Val("sec", "STRING<1-32>"),
+                new Opt(new Val("ver", "{v2c|v3}", (d, p) => SugOf(new[] { "v2c", "v3" }, p))))
             .T(new Lit("trap"), new Lit("enable")),
         C("info-center", "Log service", InfoCenterRun)
             .T(new Lit("enable"))
             .T(new Lit("loghost"), new Opt(new Lit("source"), ValIf), ValIp),
         C("clock", "Set clock/timezone", ClockRun)
-            .T(new Lit("timezone"), new Val("tz", "<name>"), new Lit("add"), new Val("off", "<HH:MM:SS>"))
+            .T(new Lit("timezone"), new Val("tz", "STRING<1-32>"), new Lit("add", "Add to the UTC time"), new Val("off", "<HH:MM:SS>"))
+            .T(new Lit("timezone"), new Val("tz", "STRING<1-32>"), new Lit("minus", "Subtract from the UTC time"), new Val("off", "<HH:MM:SS>"))
             .T(new Lit("datetime"), new Val("time", "<HH:MM:SS>"), new Val("date", "<YYYY-MM-DD>")),
         C("user-interface", "Enter user interface view", EnterUi)
-            .T(new Lit("console"), new Val("n", "<0>"))
-            .T(new Lit("vty"), new Val("a", "<0-20>"), new Opt(new Val("b", "<0-20>"))),
+            .T(new Lit("console", "Console user interface"), new Val("n", "INTEGER<0>", null, s => IsInt(s, out _)))
+            .T(new Lit("vty", "Virtual terminal user interface"), new Val("a", "INTEGER<0-20>", null, s => IsInt(s, out _)), new Opt(new Val("b", "INTEGER<0-20>", null, s => IsInt(s, out _)))),
         UndoSystemCmd,
         Nav("quit", "Exit current view", QuitRun),
         Nav("return", "Return to user view", ReturnRun),
@@ -526,25 +599,21 @@ public static class CommandSets
         return Array.Empty<string>();
     }
 
-    static (string Prefix, int Num) SplitIface(string s)
-    {
-        var slash = s.LastIndexOf('/');
-        if (slash >= 0)
-            return (s.Substring(0, slash + 1), IsInt(s.Substring(slash + 1), out var n) ? n : -1);
-        var i = s.Length - 1;
-        while (i >= 0 && char.IsDigit(s[i])) i--;
-        return (s.Substring(0, i + 1), IsInt(s.Substring(i + 1), out var m) ? m : -1);
-    }
-
     static string[] EnterRange(ExecCtx c)
     {
-        var toks = c.Tokens;
-        var idx = toks.FindIndex(x => x.Equals("to", StringComparison.OrdinalIgnoreCase));
-        if (idx <= 2) return Err("Wrong parameter found at '^' position.");
-        var left = string.Concat(toks.Skip(2).Take(idx - 2));
-        var right = string.Concat(toks.Skip(idx + 1));
-        var (p1, n1) = SplitIface(left);
-        var (p2, n2) = SplitIface(right);
+        string left, right;
+        if (c.Has("if1") && c.Has("if2"))
+        {
+            left = c.Cap("if1");
+            right = c.Cap("if2");
+        }
+        else
+        {
+            left = c.Cap("kind1") + c.Cap("num1");
+            right = c.Cap("kind2") + c.Cap("num2");
+        }
+        var (p1, n1) = Device.SplitIfaceName(left);
+        var (p2, n2) = Device.SplitIfaceName(right);
         if (!p1.Equals(p2, StringComparison.OrdinalIgnoreCase) || n1 < 0 || n2 < 0 || n1 > n2 || n2 - n1 + 1 > 64)
             return Err("Wrong parameter found at '^' position.");
         var list = new List<string>();
@@ -664,7 +733,8 @@ public static class CommandSets
             var parts = c.Cap("off").Split(':');
             if (parts.Length != 3 || !IsInt(parts[0], out var h) || !IsInt(parts[1], out var mi)) return Err("Wrong parameter found at '^' position.");
             c.Dev.Clock.Tz = c.Cap("tz");
-            c.Dev.Clock.TzOffsetSec = h * 3600 + mi * 60;
+            var sign = t.Contains("minus") ? -1 : 1;
+            c.Dev.Clock.TzOffsetSec = sign * (h * 3600 + mi * 60);
         }
         else if (t.Count >= 2 && Eq(t[1], "datetime"))
         {
@@ -764,15 +834,19 @@ public static class CommandSets
     static readonly List<Command> AaaView = new()
     {
         C("local-user", "Configure local user", LocalUserRun)
-            .T(ValUser, new Lit("password"), new Val("mode", "<cipher|irreversible-cipher>", (d, p) => SugOf(new[] { "cipher", "irreversible-cipher" }, p)), new Val("pw", "STRING<8-64>"))
-            .T(ValUser, new Lit("password"), new Val("mode", "<cipher|irreversible-cipher>", (d, p) => SugOf(new[] { "cipher", "irreversible-cipher" }, p)), new Val("pw", "STRING<8-64>"),
-                new Lit("privilege"), new Lit("level"), new Val("n", "<0-15>"))
-            .T(ValUser, new Lit("privilege"), new Lit("level"), new Val("n", "<0-15>"))
-            .T(ValUser, new Lit("service-type"), new Rep(new Val("svc", "<service>", (d, p) => SugOf(new[] { "terminal", "ssh", "telnet", "ftp", "http" }, p))))
-            .T(ValUser, new Lit("idle-timeout"), new Val("min", "<0-35791>"), new Opt(new Val("sec", "<0-59>"))),
+            .T(ValUser, new Lit("password", "Set the password"), new Val("mode", "{cipher|irreversible-cipher}", SugCipherMode,
+                    t => t.Equals("cipher", StringComparison.OrdinalIgnoreCase) || t.Equals("irreversible-cipher", StringComparison.OrdinalIgnoreCase)), new Val("pw", "STRING<8-64>"))
+            .T(ValUser, new Lit("password", "Set the password"), new Val("mode", "{cipher|irreversible-cipher}", SugCipherMode,
+                    t => t.Equals("cipher", StringComparison.OrdinalIgnoreCase) || t.Equals("irreversible-cipher", StringComparison.OrdinalIgnoreCase)), new Val("pw", "STRING<8-64>"),
+                new Lit("privilege"), new Lit("level", "Set the privilege level"), new Val("n", "INTEGER<0-15>", null, s => IsInt(s, out _)))
+            .T(ValUser, new Lit("privilege"), new Lit("level", "Set the privilege level"), new Val("n", "INTEGER<0-15>", null, s => IsInt(s, out _)))
+            .T(ValUser, new Lit("service-type", "Set the service type"), new Rep(new Val("svc", "{terminal|ssh|telnet|ftp|http}", SugServices)))
+            .T(ValUser, new Lit("idle-timeout", "Set the idle timeout"), new Val("min", "INTEGER<0-35791>", null, s => IsInt(s, out _)), new Opt(new Val("sec", "INTEGER<0-59>", null, s => IsInt(s, out _)))),
         C("local-aaa-user", "AAA user policy", LocalAaaRun)
-            .T(new Lit("wrong-password"), new Lit("retry-interval"), new Val("a", "<1-60>"), new Lit("retry-time"), new Val("b", "<1-10>"), new Lit("block-time"), new Val("c", "<1-120>"))
-            .T(new Lit("password"), new Lit("policy"), new Lit("administrator")),
+            .T(new Lit("wrong-password", "Wrong password policy"), new Lit("retry-interval", "Retry interval"), new Val("a", "INTEGER<1-60>", null, s => IsInt(s, out _)),
+                new Lit("retry-time", "Maximum retry times"), new Val("b", "INTEGER<1-10>", null, s => IsInt(s, out _)),
+                new Lit("block-time", "Block time"), new Val("c", "INTEGER<1-120>", null, s => IsInt(s, out _)))
+            .T(new Lit("password", "Password policy"), new Lit("policy", "Password policy"), new Lit("administrator", "Administrator password policy")),
         C("user-password", "Password policy", c => { c.Dev.Aaa.ComplexityCheck = true; return Array.Empty<string>(); })
             .T(new Lit("complexity-check")),
         UndoAaaCmd,
@@ -868,22 +942,22 @@ public static class CommandSets
     static readonly List<Command> AclView = new()
     {
         C("rule", "Configure ACL rule", RuleRun)
-            .T(new Val("action", "<permit|deny>", (d, p) => SugOf(new[] { "permit", "deny" }, p)), new Lit("ip"))
-            .T(new Val("action", "<permit|deny>", (d, p) => SugOf(new[] { "permit", "deny" }, p)),
-                new Lit("source"), ValIp, new Val("wc", "<wildcard>", (d, p) => new[] { new Candidate("0", "Wildcard bits : 0.0.0.0 (a host)"), new Candidate("X.X.X.X", "Wildcard of source") }))
-            .T(new Val("action", "<permit|deny>", (d, p) => SugOf(new[] { "permit", "deny" }, p)),
-                new Val("proto", "<tcp|udp>", (d, p) => SugOf(new[] { "tcp", "udp" }, p)), new Lit("destination-port"), new Lit("eq"), new Val("port", "<port>"))
-            .T(new Val("action", "<permit|deny>", (d, p) => SugOf(new[] { "permit", "deny" }, p)),
-                new Val("proto", "<tcp|udp>", (d, p) => SugOf(new[] { "tcp", "udp" }, p)), new Lit("destination-port"), new Lit("range"), new Val("p1", "<start-port>"), new Val("p2", "<end-port>"))
-            .T(new Val("action", "<permit|deny>", (d, p) => SugOf(new[] { "permit", "deny" }, p)))
-            .T(new Val("id", "<1-65535>"), new Val("action", "<permit|deny>", (d, p) => SugOf(new[] { "permit", "deny" }, p)))
-            .T(new Val("id", "<1-65535>"), new Val("action", "<permit|deny>", (d, p) => SugOf(new[] { "permit", "deny" }, p)), new Lit("ip"))
-            .T(new Val("id", "<1-65535>"), new Val("action", "<permit|deny>", (d, p) => SugOf(new[] { "permit", "deny" }, p)),
-                new Lit("source"), ValIp, new Val("wc", "<wildcard>", (d, p) => new[] { new Candidate("0", "Wildcard bits : 0.0.0.0 (a host)"), new Candidate("X.X.X.X", "Wildcard of source") }))
-            .T(new Val("id", "<1-65535>"), new Val("action", "<permit|deny>", (d, p) => SugOf(new[] { "permit", "deny" }, p)),
-                new Val("proto", "<tcp|udp>", (d, p) => SugOf(new[] { "tcp", "udp" }, p)), new Lit("destination-port"), new Lit("eq"), new Val("port", "<port>"))
-            .T(new Val("id", "<1-65535>"), new Val("action", "<permit|deny>", (d, p) => SugOf(new[] { "permit", "deny" }, p)),
-                new Val("proto", "<tcp|udp>", (d, p) => SugOf(new[] { "tcp", "udp" }, p)), new Lit("destination-port"), new Lit("range"), new Val("p1", "<start-port>"), new Val("p2", "<end-port>")),
+            .T(ValAclAction, new Lit("ip", "Any IP protocol"))
+            .T(ValAclAction, new Lit("source", "Specify the source address"), ValIp, ValWildcard)
+            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("eq", "Equal to the specified port"), ValPort)
+            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("gt", "Greater than the specified port"), ValPort)
+            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("lt", "Less than the specified port"), ValPort)
+            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("range", "In the specified port range"),
+                new Val("p1", "INTEGER<0-65535>", PortSug, s => IsInt(s, out _)), new Val("p2", "INTEGER<0-65535>", PortSug, s => IsInt(s, out _)))
+            .T(ValAclAction)
+            .T(ValAclId, ValAclAction)
+            .T(ValAclId, ValAclAction, new Lit("ip", "Any IP protocol"))
+            .T(ValAclId, ValAclAction, new Lit("source", "Specify the source address"), ValIp, ValWildcard)
+            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("eq", "Equal to the specified port"), ValPort)
+            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("gt", "Greater than the specified port"), ValPort)
+            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("lt", "Less than the specified port"), ValPort)
+            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("range", "In the specified port range"),
+                new Val("p1", "INTEGER<0-65535>", PortSug, s => IsInt(s, out _)), new Val("p2", "INTEGER<0-65535>", PortSug, s => IsInt(s, out _))),
         C("description", "ACL description", c =>
         {
             if (c.Dev.Acls.TryGetValue(c.S.AclNumber, out var a)) a.Description = string.Join(" ", c.Tokens.Skip(1));
@@ -898,7 +972,7 @@ public static class CommandSets
     static Command BuildUndoAcl()
     {
         var u = new Command("undo", "Negate a command or set its defaults") { Run = AclUndo };
-        u.T(new Lit("rule"), new Val("id", "<1-65535>"));
+        u.T(new Lit("rule"), new Val("id", "INTEGER<1-65535>", null, s => IsInt(s, out _)));
         u.T(new Lit("description"));
         return u;
     }
@@ -950,6 +1024,20 @@ public static class CommandSets
                 r.PortMin = Math.Min(p1, p2);
                 r.PortMax = Math.Max(p1, p2);
             }
+            else if (dp + 2 < t.Count && Eq(t[dp + 1], "gt"))
+            {
+                var pn = PortNum(t[dp + 2]);
+                if (pn < 0) return Err("Wrong parameter found at '^' position.");
+                r.PortMin = pn;
+                r.PortMax = 65535;
+            }
+            else if (dp + 2 < t.Count && Eq(t[dp + 1], "lt"))
+            {
+                var pn = PortNum(t[dp + 2]);
+                if (pn < 0) return Err("Wrong parameter found at '^' position.");
+                r.PortMin = 0;
+                r.PortMax = pn;
+            }
             else return Err("Incomplete command found at '^' position.");
         }
         else
@@ -990,11 +1078,13 @@ public static class CommandSets
             return Array.Empty<string>();
         }).T(new Rep(new Val("w", "<text>"))),
         C("port", "Port configuration", PortRun)
-            .T(new Lit("link-type"), new Val("lt", "<access|trunk|hybrid>", (d, p) => SugOf(new[] { "access", "trunk", "hybrid" }, p)))
-            .T(new Lit("default"), new Lit("vlan"), new Val("vid", "<vlan-id>", VlanSug))
-            .T(new Lit("trunk"), new Lit("allow-pass"), new Lit("vlan"), new Rep(new Val("vid", "<vlan-id>", VlanSug))),
+            .T(new Lit("link-type", "Set the link type"), new Val("lt", "{access|trunk|hybrid}", (d, p) => SugOf(new[] { "access", "trunk", "hybrid" }, p)))
+            .T(new Lit("default", "Set the default VLAN"), new Lit("vlan"), new Val("vid", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _)))
+            .T(new Lit("trunk", "Trunk configuration"), new Lit("allow-pass", "Allow the VLAN to pass"), new Lit("vlan"),
+                new Rep(new Val("vid", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _)))),
         C("traffic-filter", "Apply ACL on interface", TfRun)
-            .T(new Val("dir", "<inbound|outbound>", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)), new Lit("acl"), new Val("num", "<2000-3999>", AclSug)),
+            .T(new Val("dir", "{inbound|outbound}", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)), new Lit("acl", "Specify an ACL"),
+                new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _))),
         C("shutdown", "Shut down interface", c => { foreach (var i in Targets(c)) i.Shutdown = true; return Array.Empty<string>(); }).T(),
         C("ip", "IP configuration", IpRun).T(new Lit("address"), ValIp, new Val("mask", "<X.X.X.X>")),
         UndoIfaceCmd,
@@ -1010,10 +1100,11 @@ public static class CommandSets
         var u = new Command("undo", "Negate a command or set its defaults") { Run = IfaceUndo };
         u.T(new Lit("shutdown"));
         u.T(new Lit("port"), new Lit("default"), new Lit("vlan"));
-        u.T(new Lit("port"), new Lit("trunk"), new Lit("allow-pass"), new Lit("vlan"), new Val("vid", "<vlan-id>", VlanSug));
+        u.T(new Lit("port"), new Lit("trunk"), new Lit("allow-pass"), new Lit("vlan"), new Val("vid", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _)));
         u.T(new Lit("port"), new Lit("link-type"));
-        u.T(new Lit("traffic-filter"), new Val("dir", "<inbound|outbound>", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)), new Lit("acl"), new Val("num", "<2000-3999>", AclSug));
-        u.T(new Lit("traffic-filter"), new Val("dir", "<inbound|outbound>", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)));
+        u.T(new Lit("traffic-filter"), new Val("dir", "{inbound|outbound}", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)), new Lit("acl"),
+            new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)));
+        u.T(new Lit("traffic-filter"), new Val("dir", "{inbound|outbound}", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)));
         u.T(new Lit("description"));
         u.T(new Lit("ip"), new Lit("address"));
         return u;
@@ -1124,10 +1215,11 @@ public static class CommandSets
         u.T(new Lit("group-member"), new Val("if", "<interface>", IfSug));
         u.T(new Lit("shutdown"));
         u.T(new Lit("port"), new Lit("default"), new Lit("vlan"));
-        u.T(new Lit("port"), new Lit("trunk"), new Lit("allow-pass"), new Lit("vlan"), new Val("vid", "<vlan-id>", VlanSug));
+        u.T(new Lit("port"), new Lit("trunk"), new Lit("allow-pass"), new Lit("vlan"), new Val("vid", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _)));
         u.T(new Lit("port"), new Lit("link-type"));
-        u.T(new Lit("traffic-filter"), new Val("dir", "<inbound|outbound>", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)), new Lit("acl"), new Val("num", "<2000-3999>", AclSug));
-        u.T(new Lit("traffic-filter"), new Val("dir", "<inbound|outbound>", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)));
+        u.T(new Lit("traffic-filter"), new Val("dir", "{inbound|outbound}", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)), new Lit("acl"),
+            new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)));
+        u.T(new Lit("traffic-filter"), new Val("dir", "{inbound|outbound}", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)));
         u.T(new Lit("description"));
         u.T(new Lit("ip"), new Lit("address"));
         return u;
@@ -1191,8 +1283,8 @@ public static class CommandSets
     static readonly List<Command> LuppView = new()
     {
         C("password", "Local administrator password policy", LuppRun)
-            .T(new Lit("expire"), new Val("days", "<0-999>"))
-            .T(new Lit("history"), new Lit("record"), new Lit("number"), new Val("num", "<0-5>")),
+            .T(new Lit("expire", "Password expiration time"), new Val("days", "INTEGER<0-999>", null, s => IsInt(s, out _)))
+            .T(new Lit("history", "Password history policy"), new Lit("record"), new Lit("number"), new Val("num", "INTEGER<0-5>", null, s => IsInt(s, out _))),
         UndoLuppCmd,
         Nav("quit", "Exit current view", QuitRun),
         Nav("return", "Return to user view", ReturnRun),
@@ -1260,12 +1352,12 @@ public static class CommandSets
             if (Eq(c.Cap("m"), "aaa") && c.S.UiName.StartsWith("vty"))
                 return new[] { "Warning: The level of the user-interface(s) will be the default level of AAA users, please check whether it is correct." };
             return Array.Empty<string>();
-        }).T(new Val("m", "<aaa|password|none>", (d, p) => SugOf(new[] { "aaa", "password", "none" }, p))),
+        }).T(new Val("m", "{aaa|password|none}", (d, p) => SugOf(new[] { "aaa", "password", "none" }, p))),
         C("acl", "Apply ACL to VTY", c =>
         {
             if (c.Dev.Uis.TryGetValue(c.S.UiName, out var u) && IsInt(c.Cap("num"), out var n)) u.Acl = n;
             return Array.Empty<string>();
-        }).T(new Val("num", "<2000-3999>", AclSug), new Opt(new Lit("inbound"))),
+        }).T(new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)), new Opt(new Lit("inbound", "Inbound direction"))),
         C("idle-timeout", "Set idle timeout", c =>
         {
             if (!c.Dev.Uis.TryGetValue(c.S.UiName, out var u)) return Array.Empty<string>();
@@ -1274,12 +1366,12 @@ public static class CommandSets
             u.IdleMin = m;
             u.IdleSec = IsInt(c.Cap("sec"), out var s) ? s : 0;
             return Array.Empty<string>();
-        }).T(new Val("min", "<0-35791>"), new Opt(new Val("sec", "<0-59>"))),
+        }).T(new Val("min", "INTEGER<0-35791>", null, s => IsInt(s, out _)), new Opt(new Val("sec", "INTEGER<0-59>", null, s => IsInt(s, out _)))),
         C("protocol", "Protocol inbound", c =>
         {
             if (c.Dev.Uis.TryGetValue(c.S.UiName, out var u)) u.Protocol = c.Cap("p").ToLowerInvariant();
             return Array.Empty<string>();
-        }).T(new Lit("inbound"), new Val("p", "<all|ssh|telnet>", (d, p) => SugOf(new[] { "all", "ssh", "telnet" }, p))),
+        }).T(new Lit("inbound", "Inbound direction"), new Val("p", "{all|ssh|telnet}", (d, p) => SugOf(new[] { "all", "ssh", "telnet" }, p))),
         UndoUiCmd,
         Nav("quit", "Exit current view", QuitRun),
         Nav("return", "Return to user view", ReturnRun),
@@ -1289,7 +1381,7 @@ public static class CommandSets
     static Command BuildUndoUi()
     {
         var u = new Command("undo", "Negate a command or set its defaults") { Run = UiUndo };
-        u.T(new Lit("acl"), new Val("num", "<2000-3999>", AclSug));
+        u.T(new Lit("acl"), new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)));
         u.T(new Lit("authentication-mode"));
         u.T(new Lit("protocol"), new Lit("inbound"));
         u.T(new Lit("idle-timeout"));

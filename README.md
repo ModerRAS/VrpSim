@@ -26,7 +26,7 @@ dist\VrpSim.exe
 | --- | --- |
 | （无） | 交互模式，Tab / ? / 方向键 / 历史可用 |
 | `--batch` | 从标准输入读命令（脚本、管道测试用），不要求 TTY，不启用登录 |
-| `--selftest` | 内置"整套加固 → 14 项自查"回归测试，全过返回 0（输出 `SELFTEST OK`） |
+| `--selftest` | 内置"整套加固 → 14 项自查 + 68 条逐 token 补全快照"回归，全过返回 0（输出 `SELFTEST OK`） |
 | `--no-login` | 跳过 console 登录（配合 --batch） |
 | `--fresh` | 忽略上次存档，按出厂状态重新开始 |
 | `--persist` | 批处理模式也读写 `vrp-sim-state.json`（默认只有交互模式存档） |
@@ -58,6 +58,35 @@ dist\VrpSim.exe
 VLAN、read/write、端口组名等。接口类型要写全称（`Ethernet` / `GigabitEthernet` / `Vlanif` / `NULL0`，
 大小写不限），`Eth 0/0/1` 这种缩写不认（按真机口径）。
 
+### 补全快照（第一批：加固/配置演练路径）
+
+`Tab` / `?` 已按真机口径逐 token 补齐（覆盖 `演练脚本-14项.txt` 的约 60 条路径；`--selftest` 内置 68 条快照回归）。代表性位置：
+
+| 输入 | `Tab`（无占位符） | `?`（含类型占位符） |
+| --- | --- | --- |
+| `sysname ` | （自由文本） | `STRING<1-246>` |
+| `interface ` | `range` / 4 种接口类型 / 已有接口全名 | 同左 + `<interface-type>`、`<interface>` |
+| `interface Vlanif ` | `1` `8`（按 VLAN 给） | `<interface-number>` + VLAN 号 |
+| `interface range ` | `Ethernet` `GigabitEthernet` `Vlanif` + 已有全名 | 同左 + `<interface-type>` |
+| `interface range Ethernet 0/0/1 to Ethernet ` | `0/0/2` … `0/0/16` | `<interface-number>` |
+| `vlan batch ` | `1` `8`（已有 VLAN） | `INTEGER<1-4094>` |
+| `acl ` / `acl number ` | `number` + 已建 ACL 号 | `INTEGER<2000-3999>` + 已建 ACL 号 |
+| `rule ` | `permit` `deny` | `INTEGER<1-65535>` |
+| `rule 5 deny tcp destination-port ` | `eq` `gt` `lt` `range` | 同左 |
+| `rule … destination-port eq ` | `135` `137` `445` `3389` `ftp` `ssh` … | `INTEGER<0-65535>` + 常用端口名 |
+| `local-user ` | 已有本地用户 | `STRING<1-63>` + 已有本地用户 |
+| `local-user u password irreversible-cipher ` | （自由文本） | `STRING<8-64>` |
+| `local-user u service-type ` | `terminal` `ssh` `telnet` `ftp` `http` | 同左 |
+| `port default vlan ` | `1` `8`（已有 VLAN） | `INTEGER<1-4094>` |
+| `traffic-filter inbound acl ` | `2000` `2001` `3000` | `INTEGER<2000-3999>` |
+| `snmp-agent community read ` | `cipher` `simple` | 同左 + `STRING<1-32>` |
+| `clock timezone BeiJin ` | `add` `minus` | 同左 |
+| `user-interface vty ` | （自由文本） | `INTEGER<0-20>` |
+| `undo `（各视图） | 该视图可 undo 的命令 | 同左 |
+
+占位符记法统一为 `INTEGER<范围>` / `STRING<长度>` / `{a|b|c}`；参数候选按上下文生成（接口号→VLAN 号或端口号、
+ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` 直接报 `Unrecognized command`）。
+
 ## 覆盖的命令（按视图）
 
 | 视图 | 命令 |
@@ -66,7 +95,7 @@ VLAN、read/write、端口组名等。接口类型要写全称（`Ethernet` / `G
 | 系统 `[HUAWEI]` | `sysname`、`aaa`、`acl [number] <2000-3999>`（两种写法都行）、`interface`（全称或类型+编号两种写法）、`interface range … to …`、`port-group <名>`、`vlan batch`、`stelnet (ipv4/ipv6) server enable`、`ssh client first-time`、`ssh user`、`snmp-agent`（community / sys-info version / target-host / trap enable）、`info-center (enable / loghost)`、`clock timezone`、`clock datetime`、`user-interface con/vty`、`undo …` |
 | AAA `[HUAWEI-aaa]` | `local-user <u> password cipher/irreversible-cipher <pw> [privilege level <n>]`（一条命令可带权限；`service-type` 必须另起一条）、`local-user <u> privilege level`、`local-user <u> service-type`、`local-aaa-user wrong-password`、`local-aaa-user password policy administrator`、`user-password complexity-check`、`undo local-user` |
 | 本地管理员密码策略 `[HUAWEI-aaa-lupp-admin]` | `password expire <0-999>`、`password history record number <0-5>`、`display this`、`undo …`（`quit` 回 AAA 视图） |
-| ACL `[HUAWEI-acl-adv-3000]` | `rule [<id>] permit/deny [ip \| source <IP> <wildcard> \| <tcp/udp> destination-port eq/range …]`、`description`、`undo rule` |
+| ACL `[HUAWEI-acl-adv-3000]` | `rule [<id>] permit/deny [ip \| source <IP> <wildcard> \| <tcp/udp> destination-port eq/gt/lt/range …]`、`description`、`undo rule` |
 | 接口 `[HUAWEI-GigabitEthernet0/0/1]` | `description`、`port link-type`、`port default vlan`、`port trunk allow-pass vlan`、`traffic-filter inbound/outbound acl`、`shutdown` / `undo shutdown`、`ip address`（仅 Vlanif）、`display this` |
 | 接口范围 `[HUAWEI-port-group]`（模拟器扩展） | 用 `interface range <接口1> to <接口2>` 进入，支持 `shutdown`、`description`、`port …`、`traffic-filter …` 与对应 `undo` 批量生效；`ip address` 不支持 |
 | 端口组 `[HUAWEI-port-group-<名>]` | `group-member <接口> [to <接口2>]`、`undo group-member [<接口>]`，以及接口视图的 `shutdown` / `description` / `port …` / `traffic-filter …` 批量作用于成员口 |
@@ -80,7 +109,9 @@ VLAN、read/write、端口组名等。接口类型要写全称（`Ethernet` / `G
 - **rule**：`rule <id> permit|deny …` 的 **id 可省略**，取值范围 1–65535；省略时按"当前最大 id + 5"自动编号（空 ACL 首条为 5）。
   例如 `rule permit ip` → `rule 5 permit ip`，再来一条 `rule deny tcp destination-port eq 135` → `rule 10 …`。
   显式写不连续的数字（如 `rule 100 deny …`）也合法。basic ACL 里不能用 ip/tcp/udp 关键字。
-- **补全口径**：`rule ` 后面按 Tab 只补 `permit` / `deny`，不会替你填编号；按 `?` 才显示 `<1-65535>` 占位（编号按当前 ACL 内最大 id+5 自动生成，不跨 ACL 串号）。
+- **补全口径**：`rule ` 后面按 Tab 只补 `permit` / `deny`，不会替你填编号；按 `?` 才显示 `INTEGER<1-65535>` 占位（编号按当前 ACL 内最大 id+5 自动生成，不跨 ACL 串号）。
+  参数位按上下文给候选：`interface Vlanif ` 给 VLAN 号、`interface GigabitEthernet ` 给端口号、`acl number ` 给已建 ACL、
+  `port default vlan ` 给已有 VLAN、`local-user ` 给本地用户、`traffic-filter inbound acl ` 给 ACL 号、`destination-port` 给常用端口名。
 - **本地用户**：`local-user user password cipher Aa123!@# privilege level 15` 一条命令有效（口令 + 权限）；`service-type` 不能挂在同一条后面，必须单独 `local-user user service-type terminal ssh`。
 - **口令占位**：`local-user u password cipher ?` 显示 `STRING<8-64>`（类型提示），不是 `<password>`。
 - **`display this`**：按真机格式输出——配置块前后各一行 `#`，末尾跟 `return`；`interface range` 下按成员口一段一段分开，
@@ -151,6 +182,7 @@ VLAN、read/write、端口组名等。接口类型要写全称（`Ethernet` / `G
 - `save` / `display saved-configuration` 操作的是**当前工作目录**的 `saved-config.cfg` 文本，没有文件系统、没有 `vrpcfg.zip`
 - 配置持久化（`vrp-sim-state.json`）是模拟器专有行为：真机重启后未 `save` 的配置会丢，这里交互模式退出会自动存档
 - 只覆盖加固演练要用的命令子集；`display` 的详细接口统计、`debug`、`reset` 之外的系统维护命令都没有
+- 补全快照（第一批）只覆盖加固/配置演练路径（约 60 条），其余命令的候选/占位符留待后续批次调整
 
 ## 扩展
 
@@ -163,12 +195,12 @@ VLAN、read/write、端口组名等。接口类型要写全称（`Ethernet` / `G
 | 文件 | 说明 |
 | --- | --- |
 | `VrpSim.csproj` | net10.0 控制台项目 |
-| `Cli.cs` | 命令树、模板匹配、Tab/? 候选计算 |
+| `Cli.cs` | 命令树、模板匹配、Tab/? 候选计算（占位符/取值约束/上下文候选/状态去重） |
 | `Device.cs` | 设备状态模型 + `display current-configuration` / 各视图渲染 |
 | `Commands.cs` | 9 个视图的命令定义与处理函数（含 port-group / interface range） |
 | `Checks.cs` | 14 项加固判定与报告 |
 | `Editor.cs` | 行编辑器（Tab/?/方向键/历史） |
-| `Program.cs` | 启动、console 登录、批处理、自检脚本 |
+| `Program.cs` | 启动、console 登录、批处理、自检脚本（含 68 条逐 token 补全快照回归） |
 | `StateStore.cs` | 交互存档 `vrp-sim-state.json` 的读写 |
 | `演练脚本-14项.txt` | 可直接粘进模拟器的整套加固命令 |
 | `CHANGELOG-vrp-sim.md` | 改动与测试记录（交接/发布用） |

@@ -134,3 +134,79 @@ Save the configuration successfully.
    真机确切措辞未现场核对；如果有真机截图/录像可据此改。
 3. **初始口令**：README 原写 `Admin@123`、代码是 `admin@huawei.com`。已按代码统一；若现场初始口令确为 `Admin@123`，
    应改 `Device.Factory()` 并同步文档（本目录内两处：`Program.Banner` / `Device.Factory`）。
+
+
+---
+
+## 2026-11-14 v1.2 第二批：演练路径逐 token 补全（task-6）
+
+> 范围：按用户要求，只补"平时加固和配置会打的命令路径"的 `Tab` / `?` 候选与帮助（口径见 `演练脚本-14项.txt`，约 60 条路径）。
+> 两条口径：① eNSP 内置交换机是 V200R001C00/VRP 5.110（2016），比真机老 6+ 代，语料里没有的命令不等于不存在——按真机笔记
+> `artifacts/netsec/华为VRP-真机行为笔记-2026-11-14.md` 与现有实现做，不跳过；② task-5 的 eNSP 语料 JSON/矩阵本次未到位，仅作旁证，冲突以真机为准。
+
+### 一、改动
+
+**1. 候选基础设施（`Cli.cs`）**
+- `Val` 新增 `CSug`（按已捕获参数给候选）：例如 `interface Vlanif ` 读 caps 里的类型 → 给 VLAN 号；`interface GigabitEthernet ` → 给已存在端口号。
+- `Val` 已有 `Accept` 取值约束进一步用于数字/关键字参数（ACL 号、rule id、端口、privilege、idle-timeout、service-type、permit/deny、tcp/udp 等），
+  防止把 `to` / `range` 等关键字吃成参数。
+- **修 `Dedup` 状态去重 bug**：原来用 `Tok.ToString()` 做 key，两个只有 `Opt/Rep` 内部关键字不同的模板会被误判为同一状态
+  （实测 `snmp-agent community read ?` 丢了 `simple` 候选）。改为结构化 key（递归序列化 Lit/Val/Opt/Rep + caps/lits 的值）。
+
+**2. 占位符与类型（`Commands.cs`，统一 `INTEGER<范围>` / `STRING<长度>` / `{a|b|c}` 记法）**
+- 系统视图：`sysname STRING<1-246>`、`vlan batch INTEGER<1-4094>`、`acl [number] INTEGER<2000-3999>`（并给已建 ACL 候选）、
+  `port-group STRING<1-32>`、`user-interface con INTEGER<0> / vty INTEGER<0-20>`、`clock timezone STRING<1-32>`（并补 `minus` 关键字与处理）、
+  `snmp-agent community {read|write} {cipher|simple} STRING<1-32> [acl INTEGER<2000-3999>]`、
+  `snmp-agent sys-info version {v1|v2c|v3|all}`、`target-host` 的 udp-port `INTEGER<1-65535>` / securityname `STRING<1-32>` / `{v2c|v3}`。
+- AAA：`local-user` 用户名 `STRING<1-63>`、`password {cipher|irreversible-cipher} STRING<8-64>`、`privilege level INTEGER<0-15>`、
+  `service-type {terminal|ssh|telnet|ftp|http}`、`idle-timeout INTEGER<0-35791> [INTEGER<0-59>]`；
+  `local-aaa-user wrong-password retry-interval INTEGER<1-60> / retry-time INTEGER<1-10> / block-time INTEGER<1-120>`。
+- ACL：`rule [INTEGER<1-65535>] {permit|deny} …`；**新增 `destination-port gt / lt`**（原来只有 eq/range），端口参数 `INTEGER<0-65535>`
+  并给常用端口名候选（135/137/138/139/445/3389 + ftp/ssh/telnet/http/https/domain/snmp/snmptrap/netbios-*）；
+  `source` 后 wildcard 仍按真机给 `0`（主机）/ `X.X.X.X`；`undo rule INTEGER<1-65535>`。
+- 接口：`port link-type {access|trunk|hybrid}`、`port default vlan INTEGER<1-4094>` + VLAN 候选、`port trunk allow-pass vlan` 同、
+  `traffic-filter {inbound|outbound} acl INTEGER<2000-3999>` + ACL 候选、`ip address <X.X.X.X> <X.X.X.X>`。
+- VTY/Console：`authentication-mode {aaa|password|none}`、`acl INTEGER<2000-3999>`、`protocol inbound {all|ssh|telnet}`、`idle-timeout INTEGER<…>`。
+- 本地管理员密码策略视图：`password expire INTEGER<0-999>`、`password history record number INTEGER<0-5>`。
+- `display acl INTEGER<2000-3999>`（并给已建 ACL 候选）。
+
+**3. `interface range` 结构化（`Commands.cs`）**
+- 原来只有一个 `Rep(Val)` 模板（除一个占位符提示外没有任何候选）；改成两种模板：
+  `interface range <类型> <编号> to <类型> <编号>`（真机标准写法，类型/编号/to/结束类型/结束编号逐段补全）
+  与 `interface range <接口> to <接口>`（完整接口名写法，演练脚本用）。
+- `EnterRange` 改用模板捕获参数（不再按 token 位置扫 `to`），起始/结束编号支持上下文候选，校验保留（同类型、起始≤结束、≤64 个）。
+
+**4. 回归测试（`Program.cs`）**
+- `--selftest` 新增 `CompletionSelfTest()`：**68 条**逐 token 快照（覆盖用户/系统/ACL/AAA/接口/VTY/策略 7 个视图的演练路径），
+  每条检查 `Cli.Complete(dev, view, before, partial, help)` 的候选是否包含预期词/占位符，并覆盖 1 条反例（`show` 必须无候选）。
+- 输出 `COMPLETION SNAPSHOT OK: 68/68 cases`；失败会打印视图/输入/缺失词/实际候选并以非 0 退出。原 11 项自查不退化。
+
+**5. 文档**
+- `README.md`：`--selftest` 说明、`destination-port eq/gt/lt/range`、补全口径（占位符记法 + 上下文候选）、
+  新增"补全快照（第一批）"小节（代表性 Tab/? 表）、已知限制补"补全只覆盖第一批路径"、文件表更新。
+- `演练脚本-14项.txt`：**无改动**（逐条跑通，0 Error；`check` 仍 11/11）。
+
+### 二、测试结果（2026-11-14 21:04，本机）
+
+| 项 | 命令 | 结果 |
+| --- | --- | --- |
+| 编译 | `dotnet build -c Release -v q --nologo` | **0 error / 0 warning** |
+| 回归 | `--selftest`（bin exe） | **11/11 自查 + COMPLETION SNAPSHOT OK 68/68，SELFTEST OK** |
+| 演练脚本 | `演练脚本-14项.txt \| dist\VrpSim.exe --batch --no-login` | **0 条 Error**（223 行），`check` **11/11** |
+| 逐 token 快照 | 65 条路径 × 229 个 token 位（脚本在 `R:\scratch\vrp-sim\`，易失） | PASS **193**、PARAM **36**（参数位有占位符）、GAP **0** |
+| 发布 | `dotnet publish … -o dist` | `dist/VrpSim.exe` **318,071 字节**，LastWriteTime **2026-11-14 21:04:25**，sha256 `93d0dc1727e791ca…` |
+| dist 复测 | dist exe 的 `--selftest` + 演练脚本 | 11/11、68/68、0 Error |
+
+### 三、遗留 TODO（本批未做）
+
+- `display` 详细接口统计（`display interface` 无 brief 仍是 brief 表）、`display vlan <id>`、计时类真实行为（idle-timeout/失败锁定）仍未做。
+- 补全只覆盖第一批（加固/配置演练路径）；其余命令（`ssh` / `rsa` 细节、`display` 各子命令参数、`info-center` 其余分支）留后续批次。
+- task-5 的 eNSP 语料 JSON / `演练路径补全矩阵` 本次未到位（ensp-devpack 仍在抽），到了以后建议对照本批占位符做一次交叉校准。
+- port-group 组内只覆盖接口视图那几条批量命令，真机组内命令更多。
+
+### 四、疑问（不确定的没猜，留待真机/语料校准）
+
+1. `sysname STRING<1-246>`、`local-user STRING<1-63>`、`snmp-agent community STRING<1-32>`、`port-group STRING<1-32>` 的长度上限按 VRP 常规取值，
+   未逐条真机核对；若 eNSP help 资源或真机截图显示不同范围，改 `Commands.cs` 对应 `Val` 的 Hint 即可。
+2. `destination-port` 端口名候选集合（135/137-139/445/3389 + 常见服务名）是按加固演练关注端口挑的，不是真机完整 `well-known-port` 表。
+3. `interface Vlanif ?` 给的是"已建 VLAN 号"候选；真机是否只列"已建 Vlanif 号"未核对（两者在当前演练场景等价）。
