@@ -61,6 +61,7 @@ jobs:
               -o out-x86 --nologo
             if ($LASTEXITCODE -ne 0) { throw "x86 publish failed (AOT and trimmed fallback)" }
           }
+          New-Item -ItemType Directory -Force release | Out-Null
           Copy-Item 'out-x86/VrpSim.exe' 'release/VrpSim.exe'
           Write-Host ('published: ' + (Get-Item 'release/VrpSim.exe').Length + ' bytes（PDB 不上传）')
 
