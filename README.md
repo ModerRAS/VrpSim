@@ -64,16 +64,18 @@ dotnet publish VrpSim.csproj -c Release -r win-x64 --self-contained true -p:Publ
 （本机 `dist/VrpSim.exe` 与 Release 同口径：x86 AOT、约 3.14 MB、无需 .NET 运行时。发布需 .NET 10 SDK + MSVC C++ 工具链；
 本机 VS2026 若未被 ILCompiler 自动发现，先 `call vcvarsall.bat x86` 并加 `-p:IlcUseEnvironmentalTools=true`。）
 
-## 计时（v1.6.0，纯后台）
+## 计时（v1.6.1，自动累计，check 上屏）
 
-演练用时在后台自动累计，**不在任何界面/命令输出里显示**（check、quit、banner 都不打印），也不参与 `check` 评分、不写进配置：
+演练用时在后台自动累计，**只在 `check` 的输出末尾显示一行**（quit / banner / 普通命令都不显示），不参与 `check` 评分、不写进配置：
 
+- `check` 末尾：` 本次演练用时：12:34`（<1h 用 `mm:ss`，≥1h 用 `h:mm:ss`；= 已持久化累计 + 本次会话至今，即“第一次登录起累计到这次 check”的总用时）。
 - **起点**：交互模式 = 第一次打印 `Username:`、等待输入用户名的那一刻；`--no-login` / `--batch` = 进程启动。
 - **累计内容**：每成功执行一条命令记一步；用时只算**实际运行时长**（单调时钟，改系统时间/时区不影响），关掉再开继续累计（应用没运行的时间不计）。
-- **落盘位置**：`vrp-sim-state.json` 新增 `ElapsedMs`（累计毫秒）、`Steps`（累计成功命令数）、`FirstLoginAt`（首次登录开始，本地 ISO 8601 带偏移）、`UpdatedAt`（最近保存时间）。
+- **落盘位置**：`vrp-sim-state.json` 的 `ElapsedMs`（累计毫秒）、`Steps`（累计成功命令数）、`FirstLoginAt`（首次登录开始，本地 ISO 8601 带偏移）、`UpdatedAt`（最近保存时间）。
 - **彻底重来**：删掉 exe 同目录的 `vrp-sim-state.json`（或用 `--fresh`），累计清零重新开始。
 
-## 键位## 键位
+## 键位
+
 
 | 键 | 行为 |
 | --- | --- |
@@ -213,7 +215,7 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 ## 模拟器专有：check（14 项加固自查）
 
 `check` 不是 VRP 命令，只在本模拟器里存在。它按《华为交换机加固手册》14 项判定并给下一步提示
-：
+（输出末尾会附一行 ` 本次演练用时：mm:ss`，见上面的「计时」小节）：
 
 | 项 | 判定要点 |
 | --- | --- |
@@ -305,7 +307,7 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 | `Editor.cs` | 行编辑器（Tab/?/方向键/历史） |
 | `Program.cs` | 启动、console 登录、批处理、自检脚本（含 90 条逐 token 快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图/全接口/无报错冒烟/新接口类型/HELP FORMAT 回归） |
 | `HelpFormat.cs` | `?`/Tab 候选排版：两列 + 说明折行 + 命令位置去 `<cr>` |
-| `RunTimer.cs` | 后台计时：t0（登录开始/进程启动）+ 单调时钟累计 + 步数；结果随 `vrp-sim-state.json` 持久化（ElapsedMs/Steps/FirstLoginAt/UpdatedAt），不上屏、不入评分 |
+| `RunTimer.cs` | 后台计时：t0（登录开始/进程启动）+ 单调时钟累计 + 步数；随 `vrp-sim-state.json` 持久化（ElapsedMs/Steps/FirstLoginAt/UpdatedAt）；只在 `check` 末尾上屏一行，不入评分、不进配置 |
 | `StateStore.cs` | 交互存档 `vrp-sim-state.json` 的读写 |
 | `演练脚本-14项.txt` | 可直接粘进模拟器的整套加固命令 |
 | `saved-config.cfg` | `save` 落盘的当前配置（运行时生成） |

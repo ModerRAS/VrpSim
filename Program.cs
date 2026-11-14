@@ -941,7 +941,8 @@ public static class Program
         const string IsoRx = @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$";
         string Exec(Session sess, string line) => string.Join("\n", Cli.Execute(sess.Dev, sess, sess.Commands(), Tokenize(line)).Lines);
 
-        var tmp = Path.Combine(Directory.GetCurrentDirectory(), "vrpsim-timer-test.json");
+        // 临时文件优先写系统 temp；个别环境（CWD 在 R: 内存盘等）写不进去时回退到 exe 同目录
+        var tmp = Path.Combine(Path.GetTempPath(), "vrpsim-timer-test-" + Guid.NewGuid().ToString("N") + ".json");
         try { File.Delete(tmp); } catch { }
 
         // 1) 保存后 JSON 四个字段齐全且格式正确
@@ -951,6 +952,11 @@ public static class Program
         s1.Timer.NoteStep();
         s1.Timer.NoteStep();
         var saved = StateStore.Save(s1.Dev, s1.Timer, tmp, out var saveErr);
+        if (!saved)
+        {
+            tmp = Path.Combine(AppContext.BaseDirectory, "vrpsim-timer-test-" + Guid.NewGuid().ToString("N") + ".json");
+            saved = StateStore.Save(s1.Dev, s1.Timer, tmp, out saveErr);
+        }
         Case("状态保存", saved && File.Exists(tmp), "err=" + saveErr);
         long savedElapsed = 0;
         int savedSteps = 0;
@@ -998,13 +1004,15 @@ public static class Program
             Case("两次保存单调不减", e2 >= savedElapsed && st2 >= savedSteps, $"elapsed {savedElapsed}->{e2}, steps {savedSteps}->{st2}");
         }
 
-        // 4) 不上屏：check / quit / 普通命令输出都不含“用时”
+        // 4) v1.6.1：check 末尾要上屏“本次演练用时：mm:ss”，quit 仍不上屏
         var s3 = new Session();
         s3.Timer.MarkStart(RunTimer.LocalIsoNow());
         Exec(s3, "system-view");
         Exec(s3, "sysname TIMER-SILENT");
         var chk = Cli.Execute(s3.Dev, s3, s3.Commands(), Tokenize("check"));
-        Case("check 不打印用时", chk.Lines.All(l => !l.Contains("用时") && !l.Contains("ElapsedMs")), "check lines contain timer");
+        var chkLast = chk.Lines.Length > 0 ? chk.Lines[^1] : "";
+        Case("check 末行含累计用时", Rx(chkLast, @"^ 本次演练用时：(?:\d{2}:\d{2}|\d+:\d{2}:\d{2})$"), chkLast);
+        Case("check 仅一行用时字样", chk.Lines.Count(l => l.Contains("本次演练用时")) == 1, "count=" + chk.Lines.Count(l => l.Contains("本次演练用时")));
         var quit = Cli.Execute(s3.Dev, s3, s3.Commands(), Tokenize("quit"));
         Case("quit 不打印用时", quit.Lines.All(l => !l.Contains("用时")), string.Join(" | ", quit.Lines));
 

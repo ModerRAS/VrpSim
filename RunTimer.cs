@@ -45,4 +45,14 @@ public sealed class RunTimer
 
     // 给人看的时间戳：本地时间 ISO 8601 带偏移
     public static string LocalIsoNow() => DateTimeOffset.Now.ToString("yyyy-MM-dd'T'HH:mm:sszzz");
+
+    // 用时格式：<1h mm:ss，≥1h h:mm:ss
+    public static string Format(long elapsedMs)
+    {
+        var ts = TimeSpan.FromMilliseconds(elapsedMs < 0 ? 0 : elapsedMs);
+        var h = (int)ts.TotalHours;
+        return h > 0 ? $"{h}:{ts.Minutes:00}:{ts.Seconds:00}" : $"{ts.Minutes:00}:{ts.Seconds:00}";
+    }
+
+    public string ElapsedText() => Format(ElapsedMs);
 }

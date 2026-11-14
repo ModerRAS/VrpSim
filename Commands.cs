@@ -508,7 +508,14 @@ public static class CommandSets
     }
 
     static readonly Command CheckCmd = new Command("check", "Run hardening self-check (simulator only)")
-    { Run = c => Checks.Format(Checks.Run(c.Dev), c.Dev) }.T();
+    {
+        Run = c =>
+        {
+            var lines = Checks.Format(Checks.Run(c.Dev), c.Dev).ToList();
+            lines.Add(" 本次演练用时：" + c.S.Timer.ElapsedText());   // v1.6.1：check 上屏累计用时（其他位置仍不上屏）
+            return lines.ToArray();
+        }
+    }.T();
 
     static Command Nav(string kw, string help, Func<ExecCtx, string[]> run)
         => new Command(kw, help) { Run = run }.T();
