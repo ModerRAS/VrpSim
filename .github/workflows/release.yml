@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   release:
-    name: publish self-contained win-x64 single file
+    name: publish NativeAOT win-x86 single file
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:
@@ -40,18 +40,33 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: Publish (self-contained single-file win-x64)
+      - name: Publish x86 NativeAOT (single asset; fallback = trimmed single file)
         run: |
-          dotnet publish VrpSim.csproj -c Release -r win-x64 --self-contained true `
-            -p:PublishSingleFile=true `
-            -p:IncludeNativeLibrariesForSelfExtract=true `
-            -p:EnableCompressionInSingleFile=true `
+          # 口径（用户 2026-11-14）：Release 只发 x86 一份（32 位 Windows 与 64 位 Windows WOW64 都能跑），
+          # x64 不再上传；需要 x64 可本地 dotnet publish -r win-x64 -p:PublishAot=true 自建。
+          # AOT 实测 x86 3.12 MB / 冷启动 ~26ms。
+          dotnet publish VrpSim.csproj -c Release -r win-x86 --self-contained true `
+            -p:PublishAot=true `
+            -p:StripSymbols=true `
             -p:DebugType=None `
-            -o out --nologo
+            -o out-x86 --nologo
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path 'out-x86/VrpSim.exe')) {
+            Write-Warning "NativeAOT x86 publish failed (exit $LASTEXITCODE); falling back to trimmed single-file"
+            Remove-Item out-x86 -Recurse -Force -ErrorAction SilentlyContinue
+            dotnet publish VrpSim.csproj -c Release -r win-x86 --self-contained true `
+              -p:PublishTrimmed=true -p:TrimMode=full `
+              -p:PublishSingleFile=true `
+              -p:EnableCompressionInSingleFile=true `
+              -p:DebugType=None `
+              -o out-x86 --nologo
+            if ($LASTEXITCODE -ne 0) { throw "x86 publish failed (AOT and trimmed fallback)" }
+          }
+          Copy-Item 'out-x86/VrpSim.exe' 'release/VrpSim.exe'
+          Write-Host ('published: ' + (Get-Item 'release/VrpSim.exe').Length + ' bytes（PDB 不上传）')
 
       - name: Selftest published exe
         run: |
-          $out = (& 'out/VrpSim.exe' --selftest 2>&1 | Out-String)
+          $out = (& 'release/VrpSim.exe' --selftest 2>&1 | Out-String)
           $code = $LASTEXITCODE
           $out | Write-Host
           if ($code -ne 0) { throw "published exe selftest failed: exit code $code" }
@@ -60,11 +75,11 @@ jobs:
 
       - name: Write SHA-256 checksum
         run: |
-          $exe = Resolve-Path 'out/VrpSim.exe'
-          $size = (Get-Item -LiteralPath $exe).Length
-          $hash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLower()
+          $p = 'release/VrpSim.exe'
+          $size = (Get-Item -LiteralPath $p).Length
+          $hash = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower()
           $line = "$hash  VrpSim.exe`n"
-          [System.IO.File]::WriteAllText((Join-Path (Get-Location).Path 'out/VrpSim.exe.sha256'), $line, [System.Text.UTF8Encoding]::new($false))
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location).Path 'release/VrpSim.exe.sha256'), $line, [System.Text.UTF8Encoding]::new($false))
           Write-Host "VrpSim.exe = $size bytes, sha256 = $hash"
 
       - name: Create GitHub Release
@@ -73,5 +88,5 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           $tag = $env:TAG
-          gh release create $tag 'out/VrpSim.exe' 'out/VrpSim.exe.sha256' --verify-tag --title "VrpSim $tag" --generate-notes
+          gh release create $tag 'release/VrpSim.exe' 'release/VrpSim.exe.sha256' --verify-tag --title "VrpSim $tag" --generate-notes
           gh release view $tag --json url,tagName,assets --jq '{url: .url, tag: .tagName, assets: [.assets[] | {name: .name, size: .size}]}'

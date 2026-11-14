@@ -108,6 +108,8 @@ public sealed class Device
     public bool StelnetV4, StelnetV6;
     public bool SnmpAgent, SnmpTrapEnable;
     public string SnmpVersion = "v3";
+    public string SnmpContact = "";
+    public string SnmpLocation = "";
     public bool InfoCenterEnabled = true;
     public string MonitorIp = "192.168.12.1";
     public HashSet<int> Vlans = new();
@@ -159,17 +161,26 @@ public sealed class Device
 
     public static int IfOrder(string name)
     {
-        int idx = 0;
+        int idx;
         if (name.StartsWith("Ethernet")) idx = 0;
+        else if (name.StartsWith("Eth-Trunk")) idx = 50;
         else if (name.StartsWith("GigabitEthernet")) idx = 100;
+        else if (name.StartsWith("LoopBack")) idx = 150;
         else if (name.StartsWith("Vlanif")) idx = 200;
+        else if (name.StartsWith("Tunnel")) idx = 250;
         else idx = 300;
         var digits = new string(name.Where(char.IsDigit).ToArray());
         int num = digits.Length > 0 ? int.Parse(digits) : 0;
         return idx * 1000 + num;
     }
 
-    public string AclViewName(int n) => n >= 3000 ? $"acl-adv-{n}" : $"acl-basic-{n}";
+    public string AclViewName(int n) => n switch
+    {
+        < 3000 => $"acl-basic-{n}",
+        < 4000 => $"acl-adv-{n}",
+        < 5000 => $"acl-l2-{n}",
+        _ => $"acl-user-{n}"
+    };
 
     public string UiViewName(string name) => name.Replace(" ", "") switch
     {
@@ -217,7 +228,8 @@ public sealed class Device
         }
         L.AddRange(RenderAaa());
         Sep();
-        foreach (var i in Ifaces.Values.Where(i => i.HasConfig).OrderBy(i => IfOrder(i.Name)))
+        // 真机 dis cu 会打印配置库里所有接口对象：空口也输出 # / interface X / # 空块
+        foreach (var i in Ifaces.Values.OrderBy(i => IfOrder(i.Name)))
         {
             L.Add($"interface {i.Name}");
             if (!string.IsNullOrEmpty(i.Description)) L.Add($" description {i.Description}");
@@ -247,6 +259,8 @@ public sealed class Device
             L.Add("snmp-agent local-engineid 800007DB03E0CC7A085C00");
             foreach (var c in Communities)
                 L.Add($"snmp-agent community {(c.Read ? "read" : "write")} cipher {Cipher(c.Password)}" + (c.Acl is int n ? $" acl {n}" : ""));
+            if (SnmpContact.Length > 0) L.Add($"snmp-agent sys-info contact {SnmpContact}");
+            if (SnmpLocation.Length > 0) L.Add($"snmp-agent sys-info location {SnmpLocation}");
             L.Add($"snmp-agent sys-info version {SnmpVersion}");
             foreach (var t in Targets)
                 L.Add($"snmp-agent target-host trap address udp-domain {t.Ip}" + (t.Port != 162 ? $" udp-port {t.Port}" : "") +

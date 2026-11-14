@@ -1,13 +1,17 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace VrpSim;
+
+// NativeAOT / trimming 兼容：用源生成上下文替代反射序列化（IncludeFields/缩进与原来一致）
+[JsonSourceGenerationOptions(IncludeFields = true, WriteIndented = true)]
+[JsonSerializable(typeof(StateStore.State))]
+internal sealed partial class StateJsonContext : JsonSerializerContext { }
 
 public static class StateStore
 {
     public static string DefaultPath => Path.Combine(AppContext.BaseDirectory, "vrp-sim-state.json");
-
-    static readonly JsonSerializerOptions Options = new() { IncludeFields = true, WriteIndented = true };
 
     public sealed class State
     {
@@ -16,6 +20,8 @@ public static class StateStore
         public bool StelnetV4, StelnetV6;
         public bool SnmpAgent, SnmpTrapEnable;
         public string SnmpVersion = "v3";
+        public string SnmpContact = "";
+        public string SnmpLocation = "";
         public string MonitorIp = "192.168.12.1";
         public bool InfoCenterEnabled = true;
         public bool AdminDeleted;
@@ -83,7 +89,7 @@ public static class StateStore
             HttpServer = d.HttpServer, HttpsServer = d.HttpsServer,
             StelnetV4 = d.StelnetV4, StelnetV6 = d.StelnetV6,
             SnmpAgent = d.SnmpAgent, SnmpTrapEnable = d.SnmpTrapEnable,
-            SnmpVersion = d.SnmpVersion, MonitorIp = d.MonitorIp,
+            SnmpVersion = d.SnmpVersion, SnmpContact = d.SnmpContact, SnmpLocation = d.SnmpLocation, MonitorIp = d.MonitorIp,
             InfoCenterEnabled = d.InfoCenterEnabled, AdminDeleted = d.AdminDeleted,
             Vlans = d.Vlans.OrderBy(v => v).ToList(),
             LogHosts = d.LogHosts.ToList(),
@@ -163,7 +169,9 @@ public static class StateStore
         d.HttpServer = s.HttpServer; d.HttpsServer = s.HttpsServer;
         d.StelnetV4 = s.StelnetV4; d.StelnetV6 = s.StelnetV6;
         d.SnmpAgent = s.SnmpAgent; d.SnmpTrapEnable = s.SnmpTrapEnable;
-        d.SnmpVersion = s.SnmpVersion; d.MonitorIp = s.MonitorIp;
+        d.SnmpVersion = s.SnmpVersion;
+        d.SnmpContact = s.SnmpContact ?? ""; d.SnmpLocation = s.SnmpLocation ?? "";
+        d.MonitorIp = s.MonitorIp;
         d.InfoCenterEnabled = s.InfoCenterEnabled; d.AdminDeleted = s.AdminDeleted;
         d.Vlans = new HashSet<int>(s.Vlans);
         d.LogHosts = s.LogHosts.ToList();
@@ -239,7 +247,7 @@ public static class StateStore
         try
         {
             var s = ToState(d, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
-            File.WriteAllText(path, JsonSerializer.Serialize(s, Options), new UTF8Encoding(false));
+            File.WriteAllText(path, JsonSerializer.Serialize(s, StateJsonContext.Default.State), new UTF8Encoding(false));
             error = null;
             return true;
         }
@@ -251,7 +259,7 @@ public static class StateStore
         try
         {
             if (!File.Exists(path)) { error = null; return null; }
-            var s = JsonSerializer.Deserialize<State>(File.ReadAllText(path, Encoding.UTF8), Options);
+            var s = JsonSerializer.Deserialize(File.ReadAllText(path, Encoding.UTF8), StateJsonContext.Default.State);
             if (s == null) { error = "存档内容为空"; return null; }
             error = null;
             return FromState(s);

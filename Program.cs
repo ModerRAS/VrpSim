@@ -267,10 +267,8 @@ public static class Program
 
     static void PrintCandidates(List<Candidate> cands)
     {
-        if (cands.Count == 0) { Console.WriteLine("  (no match)"); return; }
-        var w = Math.Max(4, cands.Max(c => c.Word.Length));
-        foreach (var c in cands)
-            Console.WriteLine("  " + (c.Word.Length == 0 ? "<cr>" : c.Word).PadRight(w + 2) + c.Help);
+        if (cands.Count == 0 || cands.All(c => c.Word.Length == 0)) { Console.WriteLine("  (no match)"); return; }
+        foreach (var line in HelpFormat.Format(cands)) Console.WriteLine(line);
     }
 
     static void PrintCompletion(Session s, string text)
@@ -328,7 +326,8 @@ public static class Program
         foreach (var l in Checks.Format(rows, s.Dev)) Console.WriteLine(l);
         var fails = rows.Where(r => r.Ok == false).ToList();
         var candFailed = CompletionSelfTest(s) + CompletionOrderSelfTest(s) + RangeExecSelfTest()
-                         + IfaceFormSelfTest() + VlanExecSelfTest() + NullIfaceSelfTest();
+                         + IfaceFormSelfTest() + VlanExecSelfTest() + NullIfaceSelfTest() + ConfigIfaceSelfTest(s)
+                         + NoErrorSelfTest() + NewIfaceSelfTest() + HelpFormatSelfTest();
         if (fails.Count > 0 || candFailed > 0)
         {
             Console.WriteLine($"SELFTEST: {fails.Count} check item(s) failed, {candFailed} completion/range case(s) failed");
@@ -357,39 +356,45 @@ public static class Program
             ("system", "vlan batch 8 ", true, new[] { "<cr>" }, null),
             ("system", "vlan ", true, new[] { "batch", "INTEGER<1-4094>" }, null),
             ("system", "undo vlan ", true, new[] { "INTEGER<1-4094>", "1", "8" }, null),
-            ("system", "interface ", true, new[] { "range", "Ethernet", "GigabitEthernet", "Vlanif", "NULL" },
+            ("system", "interface ", true, new[] { "range", "Eth-Trunk", "Ethernet", "GigabitEthernet", "LoopBack", "NULL", "Tunnel", "Vlanif" },
                 new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "Vlanif8", "NULL0", "<interface-type>", "<interface>" }),
             ("system", "interface ethernet", false, new[] { "Ethernet" }, new[] { "Ethernet0/0/1" }),
             ("system", "interface NULL ", false, new[] { "0" }, null),
             ("system", "interface Vlanif ", false, new[] { "1", "8" }, null),
             ("system", "interface GigabitEthernet ", false, new[] { "0/0/1", "0/0/12" }, null),
             ("system", "interface Ethernet ", false, new[] { "0/0/1", "0/0/16" }, null),
-            ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL" },
+            ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif" },
                 new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "Vlanif8", "NULL0" }),
             ("system", "interface range ethernet ", false, new[] { "0/0/1", "0/0/16" }, new[] { "ethernet0/0/1" }),
             ("system", "interface range Ethernet 0/0/1 ", true, new[] { "to" }, null),
             ("system", "interface range Ethernet 0/0/1 to Ethernet ", false, new[] { "0/0/2", "0/0/16" }, null),
-            ("system", "acl ", true, new[] { "number", "INTEGER<2000-3999>", "2000", "3000" }, null),
+            ("system", "acl ", true, new[] { "INTEGER<2000-2999>", "INTEGER<3000-3999>", "INTEGER<4000-4999>", "INTEGER<5000-5999>", "ipv6", "name", "number", "2000", "3000" }, null),
             ("system", "acl number ", false, new[] { "2000", "2001", "3000", "3999" }, null),
             ("system", "undo ", true, new[] { "telnet", "ftp", "http", "stelnet", "snmp-agent", "acl", "sysname", "info-center", "clock", "vlan" }, null),
             ("system", "undo telnet ", true, new[] { "server" }, null),
             ("system", "undo telnet server ", true, new[] { "enable" }, null),
-            ("system", "stelnet ", true, new[] { "server", "ipv4", "ipv6" }, null),
+            ("system", "stelnet ", true, new[] { "server", "ipv4", "ipv6", "STRING<1-255>" }, null),
             ("system", "clock timezone BeiJin ", true, new[] { "add", "minus" }, null),
             ("system", "clock timezone BeiJin add ", true, new[] { "<HH:MM:SS>" }, null),
             ("system", "clock datetime ", true, new[] { "<HH:MM:SS>" }, null),
-            ("system", "user-interface ", true, new[] { "console", "vty" }, null),
+            ("system", "user-interface ", true, new[] { "INTEGER<0,34-48,50-54>", "console", "current", "maximum-vty", "vty" }, null),
             ("system", "user-interface vty ", true, new[] { "INTEGER<0-20>" }, null),
-            ("system", "snmp-agent ", true, new[] { "community", "sys-info", "target-host", "trap" }, null),
+            ("system", "snmp-agent ", true, new[] { "community", "extend", "group", "inform", "local-engineid", "manner", "mib-view", "notification-log", "notify-filter-profile", "packet", "packet-priority", "set-cache", "usm-user", "sys-info", "target-host", "trap" }, null),
             ("system", "snmp-agent community ", true, new[] { "read", "write" }, null),
             ("system", "snmp-agent community read ", true, new[] { "cipher", "simple", "STRING<1-32>" }, null),
+            ("system", "snmp-agent sys-info ", true, new[] { "contact", "location", "version" }, null),
             ("system", "snmp-agent sys-info version ", true, new[] { "v1", "v2c", "v3", "all" }, null),
+            ("system", "snmp-agent target-host ", true, new[] { "inform", "trap" }, null),
             ("system", "snmp-agent target-host trap address udp-domain ", true, new[] { "<X.X.X.X>" }, null),
+            ("system", "snmp-agent trap ", true, new[] { "disable", "enable", "life", "queue-size", "source", "suppress", "type" }, null),
             ("system", "port-group ", true, new[] { "STRING<1-32>" }, null),
-            ("system", "info-center loghost ", true, new[] { "source", "<X.X.X.X>" }, null),
+            ("system", "info-center ", true, new[] { "channel", "console", "enable", "filter-id", "local", "logbuffer", "loghost", "monitor", "rate-limit", "snmp", "source", "statistic-suppress", "timestamp", "trapbuffer" }, null),
+            ("system", "info-center loghost ", true, new[] { "<X.X.X.X>", "ipv6", "source" }, null),
+            ("system", "aaa ", true, new[] { "abnormal-offline-record", "offline-record", "online-fail-record", "<cr>" }, null),
+            ("system", "rsa ", true, new[] { "local-key-pair", "peer-public-key" }, null),
             // ---- ACL 视图 ----
-            ("acl", "rule ", true, new[] { "permit", "deny", "INTEGER<1-65535>" }, null),
-            ("acl", "rule 5 ", true, new[] { "permit", "deny" }, null),
+            ("acl", "rule ", true, new[] { "permit", "deny", "INTEGER<0-4294967294>" }, null),
+            ("acl", "rule 5 ", true, new[] { "permit", "deny", "description" }, null),
             ("acl", "rule 5 deny tcp destination-port ", true, new[] { "eq", "gt", "lt", "range" }, null),
             ("acl", "rule 5 deny tcp destination-port eq ", true, new[] { "INTEGER<0-65535>", "135", "445", "3389" }, null),
             ("acl", "rule 5 deny tcp destination-port range ", true, new[] { "INTEGER<0-65535>", "137", "139" }, null),
@@ -397,21 +402,31 @@ public static class Program
             ("acl", "undo ", true, new[] { "rule", "description" }, null),
             ("acl", "undo rule ", true, new[] { "INTEGER<1-65535>" }, null),
             // ---- AAA 视图 ----
-            ("aaa", "local-user ", true, new[] { "STRING<1-63>", "opsadmin" }, null),
-            ("aaa", "local-user opsadmin ", true, new[] { "password", "privilege", "service-type", "idle-timeout" }, null),
-            ("aaa", "local-user opsadmin password ", true, new[] { "cipher", "irreversible-cipher" }, null),
+            ("aaa", "local-user ", true, new[] { "STRING<1-64>", "opsadmin" }, null),
+            ("aaa", "local-user opsadmin ", true, new[] { "access-limit", "ftp-directory", "idle-timeout", "password", "privilege", "service-type", "state" }, null),
+            ("aaa", "local-user opsadmin password ", true, new[] { "cipher", "irreversible-cipher", "simple" }, null),
             ("aaa", "local-user opsadmin password irreversible-cipher ", true, new[] { "STRING<8-64>" }, null),
             ("aaa", "local-user opsadmin privilege level ", true, new[] { "INTEGER<0-15>" }, null),
-            ("aaa", "local-user opsadmin service-type ", true, new[] { "terminal", "ssh", "telnet", "ftp", "http" }, null),
+            ("aaa", "local-user opsadmin service-type ", true, new[] { "8021x", "bind", "ftp", "http", "ppp", "ssh", "telnet", "terminal", "web", "x25-pad" }, null),
             ("aaa", "local-aaa-user ", true, new[] { "wrong-password", "password" }, null),
             ("aaa", "local-aaa-user wrong-password ", true, new[] { "retry-interval" }, null),
             ("aaa", "local-aaa-user wrong-password retry-interval ", true, new[] { "INTEGER<1-60>" }, null),
             ("aaa", "undo ", true, new[] { "local-user", "user-password", "local-aaa-user" }, null),
             ("aaa", "undo local-user ", true, new[] { "opsadmin" }, null),
             // ---- 接口视图 ----
-            ("iface", "port ", true, new[] { "link-type", "default", "trunk" }, null),
-            ("iface", "port link-type ", true, new[] { "access", "trunk", "hybrid" }, null),
+            ("iface", "port ", true, new[] { "link-type", "add-tag", "discard", "hybrid", "link-flap", "mux-vlan", "priority", "type", "vlan-mapping", "vlan-stacking", "default", "trunk" }, null),
+            ("iface", "port link-type ", true, new[] { "access", "dot1q-tunnel", "hybrid", "trunk" }, null),
             ("iface", "port default vlan ", true, new[] { "INTEGER<1-4094>", "1", "8" }, null),
+            ("iface", "description ", true, new[] { "TEXT" }, null),
+            ("iface", "ip ", true, new[] { "address", "source" }, null),
+            ("iface", "port hybrid ", false, Array.Empty<string>(), null),
+            ("vlan", "description ", true, new[] { "TEXT" }, null),
+            ("acl", "description ", true, new[] { "TEXT" }, null),
+            ("acl", "rule 5 deny tcp ", true, new[] { "destination", "destination-port", "dscp", "fragment", "logging", "precedence", "source", "source-port", "tcp-flag", "time-range", "tos" }, null),
+            ("acl", "rule 5 permit source ", true, new[] { "<X.X.X.X>" }, null),
+            ("acl", "rule 5 deny fragment ", true, new[] { "<cr>" }, null),
+            ("ui", "acl ipv6 ", true, new[] { "INTEGER<2000-3999>" }, null),
+            ("system", "snmp-agent extend ", false, Array.Empty<string>(), null),
             ("iface", "port trunk allow-pass vlan ", true, new[] { "INTEGER<1-4094>", "8" }, null),
             ("iface", "traffic-filter ", true, new[] { "inbound", "outbound" }, null),
             ("iface", "traffic-filter inbound ", true, new[] { "acl" }, null),
@@ -420,7 +435,7 @@ public static class Program
             ("iface", "undo ", true, new[] { "shutdown", "port", "traffic-filter", "description", "ip" }, null),
             // ---- user-interface 视图 ----
             ("ui", "authentication-mode ", true, new[] { "aaa", "password", "none" }, null),
-            ("ui", "acl ", true, new[] { "INTEGER<2000-3999>", "2000" }, null),
+            ("ui", "acl ", true, new[] { "INTEGER<2000-3999>", "2000", "ipv6" }, null),
             ("ui", "protocol inbound ", true, new[] { "all", "ssh", "telnet" }, null),
             ("ui", "idle-timeout ", true, new[] { "INTEGER<0-35791>" }, null),
             // ---- 本地管理员密码策略视图 ----
@@ -474,10 +489,10 @@ public static class Program
     {
         var cases = new (string View, string Text, bool Help, string[] Order, string[] Absent, int Count)[]
         {
-            ("system", "interface ", true, new[] { "range", "Ethernet", "GigabitEthernet", "Vlanif", "NULL" },
-                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "NULL0", "<interface-type>", "<interface>" }, 5),
-            ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL" },
-                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "NULL0", "<interface-type>", "<interface>" }, 4),
+            ("system", "interface ", true, new[] { "range", "Eth-Trunk", "Ethernet", "GigabitEthernet", "LoopBack", "NULL", "Tunnel", "Vlanif" },
+                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "NULL0", "<interface-type>", "<interface>" }, 8),
+            ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif" },
+                new[] { "Ethernet0/0/1", "GigabitEthernet0/0/1", "Vlanif1", "NULL0", "<interface-type>", "<interface>" }, 3),
             ("system", "interface ethernet", false, new[] { "Ethernet" }, new[] { "Ethernet0/0/1" }, 1),
             ("system", "vlan ", true, new[] { "batch", "INTEGER<1-4094>" }, new[] { "1", "8" }, 2),
         };
@@ -718,6 +733,296 @@ public static class Program
         Console.WriteLine(failed == 0
             ? $"VLAN VIEW OK: {checks.Count}/{checks.Count} cases"
             : $"VLAN VIEW: {checks.Count - failed}/{checks.Count} cases passed");
+        return failed;
+    }
+
+    // display current-configuration 全接口回归（16 百兆 + 12 千兆 + Vlanif + NULL0，空口也出块）
+    static int ConfigIfaceSelfTest(Session s)
+    {
+        var cfg = s.Dev.RenderConfig();
+        var expected = new List<string>();
+        for (var i = 1; i <= 16; i++) expected.Add($"interface Ethernet0/0/{i}");
+        for (var i = 1; i <= 12; i++) expected.Add($"interface GigabitEthernet0/0/{i}");
+        expected.Add("interface Vlanif1");
+        expected.Add("interface Vlanif8");   // 演练脚本里创建的
+        expected.Add("interface NULL0");
+        var failed = 0;
+        void Check(string label, bool ok, string detail = "")
+        {
+            if (ok) return;
+            failed++;
+            Console.WriteLine($"  CONFIG IFACE FAIL: {label}" + (detail.Length > 0 ? " -> " + detail : ""));
+        }
+        var ifaceLines = cfg.Where(l => l.StartsWith("interface ", StringComparison.Ordinal)).ToList();
+        Check("接口行/顺序", ifaceLines.SequenceEqual(expected),
+            "count=" + ifaceLines.Count + " got=" + string.Join(",", ifaceLines.Take(40)));
+        // 空口块格式：上一行 #、下一行 #（Vlanif1 在加固后仍为空口）
+        var idx = cfg.IndexOf("interface Vlanif1");
+        Check("空口块格式", idx > 0 && idx + 1 < cfg.Count && cfg[idx - 1] == "#" && cfg[idx + 1] == "#",
+            idx < 0 ? "not found" : $"prev={cfg[idx - 1]} next={cfg[idx + 1]}");
+        // | include interface 过滤（真机 include 是子串匹配，会连带 user-interface，只要接口行全在即可）
+        var filtered = cfg.Where(l => l.Contains("interface", StringComparison.OrdinalIgnoreCase)).ToList();
+        Check("include interface 过滤", expected.All(e => filtered.Contains(e)),
+            "missing=" + string.Join(",", expected.Where(e => !filtered.Contains(e))));
+        // 28 个物理口 + NULL0 都在
+        Check("28 物理口齐全",
+            cfg.Count(l => l.StartsWith("interface Ethernet0/0/", StringComparison.Ordinal)) == 16 &&
+            cfg.Count(l => l.StartsWith("interface GigabitEthernet0/0/", StringComparison.Ordinal)) == 12 &&
+            cfg.Contains("interface NULL0"));
+        Console.WriteLine(failed == 0 ? "CONFIG IFACES OK: 4/4 cases" : $"CONFIG IFACES: {4 - failed}/4 cases passed");
+        return failed;
+    }
+
+    // "看得到就能敲"：? 里出现的候选，敲下去不得报错（用户口径：不能 ? 有、一敲就报错）
+    static int NoErrorSelfTest()
+    {
+        var cases = new (string Nav, string Cmd)[]
+        {
+            ("system-view", "aaa abnormal-offline-record"),
+            ("system-view", "aaa offline-record"),
+            ("system-view", "aaa online-fail-record"),
+            ("system-view", "acl ipv6 3000"),
+            ("system-view", "acl name test1"),
+            ("system-view", "acl 4000"),
+            ("system-view", "acl 5000"),
+            ("system-view", "info-center channel 0 name chan0"),
+            ("system-view", "info-center console"),
+            ("system-view", "info-center filter-id 1"),
+            ("system-view", "info-center local"),
+            ("system-view", "info-center logbuffer"),
+            ("system-view", "info-center monitor"),
+            ("system-view", "info-center rate-limit 10"),
+            ("system-view", "info-center snmp"),
+            ("system-view", "info-center source"),
+            ("system-view", "info-center statistic-suppress"),
+            ("system-view", "info-center timestamp"),
+            ("system-view", "info-center trapbuffer"),
+            ("system-view", "info-center loghost ipv6 2001:db8::1"),
+            ("system-view", "snmp-agent sys-info contact ops"),
+            ("system-view", "snmp-agent sys-info location room1"),
+            ("system-view", "snmp-agent target-host inform address udp-domain 192.168.12.1 params securityname cipher Public@123 v2c"),
+            ("system-view", "snmp-agent trap disable"),
+            ("system-view", "snmp-agent trap life 60"),
+            ("system-view", "snmp-agent trap queue-size 100"),
+            ("system-view", "snmp-agent trap source"),
+            ("system-view", "snmp-agent trap suppress"),
+            ("system-view", "snmp-agent trap type"),
+            ("system-view", "snmp-agent extend packet-priority 1"),
+            ("system-view", "snmp-agent group v3 g1 privacy"),
+            ("system-view", "snmp-agent inform address udp-domain 192.168.12.1"),
+            ("system-view", "snmp-agent local-engineid 800007DB03000000000000"),
+            ("system-view", "snmp-agent manner alarm"),
+            ("system-view", "snmp-agent mib-view view1 include 1.3.6.1"),
+            ("system-view", "snmp-agent notification-log"),
+            ("system-view", "snmp-agent notify-filter-profile p1"),
+            ("system-view", "snmp-agent packet max-size 1200"),
+            ("system-view", "snmp-agent set-cache enable"),
+            ("system-view", "snmp-agent usm-user v3 u1 group g1"),
+            ("system-view", "stelnet 192.168.12.1"),
+            ("system-view", "rsa peer-public-key"),
+            ("system-view", "user-interface 5"),
+            ("system-view", "user-interface current"),
+            ("system-view", "user-interface maximum-vty 10"),
+            ("system-view", "interface Eth-Trunk 1"),
+            ("system-view", "interface LoopBack 0"),
+            ("system-view", "interface Tunnel 5"),
+            ("system-view", "interface NULL 0"),
+            ("system-view", "vlan 200"),
+            ("system-view\naaa", "local-user u1 access-limit max-user-number 8"),
+            ("system-view\naaa", "local-user u1 ftp-directory flash:"),
+            ("system-view\naaa", "local-user u1 state block"),
+            ("system-view\naaa", "local-user u1 password simple Str0ng@Pass1"),
+            ("system-view\naaa\nlocal-user u1 password simple Str0ng@Pass1", "local-user u1 service-type ppp web bind"),
+            ("system-view\ninterface GigabitEthernet 0/0/1", "port hybrid pvid vlan 8"),
+            ("system-view\ninterface GigabitEthernet 0/0/1", "port discard tagged"),
+            ("system-view\ninterface GigabitEthernet 0/0/1", "port type access"),
+            ("system-view\ninterface GigabitEthernet 0/0/1", "port link-type dot1q-tunnel"),
+            ("system-view\ninterface GigabitEthernet 0/0/1", "ip source 192.168.12.15 0.0.0.0"),
+            ("system-view\ninterface GigabitEthernet 0/0/1", "description TEXT text"),
+            ("system-view\nvlan 8", "description TEXT text"),
+            ("system-view\nacl number 3000", "description TEXT text"),
+            ("system-view\nacl number 3000", "rule 5 deny fragment"),
+            ("system-view\nacl number 3000", "rule 5 deny logging"),
+            ("system-view\nacl number 3000", "rule 5 deny time-range t1"),
+            ("system-view\nacl number 3000", "rule 5 deny tcp destination 1.1.1.1 0.0.0.0"),
+            ("system-view\nacl number 3000", "rule 5 deny tcp source 1.1.1.1 0.0.0.0"),
+            ("system-view\nacl number 3000", "rule 5 deny tcp source-port eq 80"),
+            ("system-view\nacl number 3000", "rule 5 deny tcp dscp 46"),
+            ("system-view\nacl number 3000", "rule 5 deny tcp precedence 5"),
+            ("system-view\nacl number 3000", "rule 5 deny tcp tcp-flag syn ack"),
+            ("system-view\nacl number 3000", "rule 5 deny tcp tos 0"),
+            ("system-view\nacl number 3000", "rule 5 description rule-desc"),
+            ("system-view\nacl number 2000", "rule 5 permit source any"),
+            ("system-view\nuser-interface vty 0 4", "acl ipv6 3000"),
+        };
+        var failed = 0;
+        foreach (var tc in cases)
+        {
+            var dev = Device.Factory();
+            var sess = new Session { Dev = dev };
+            var res = new ExecResult();
+            foreach (var nav in tc.Nav.Split('\n'))
+            {
+                res = Cli.Execute(dev, sess, sess.Commands(), Tokenize(nav));
+                if (res.Error != null) break;
+            }
+            if (res.Error == null) res = Cli.Execute(dev, sess, sess.Commands(), Tokenize(tc.Cmd));
+            var bad = res.Error != null || res.Lines.Any(l => l.StartsWith("Error:", StringComparison.Ordinal));
+            if (!bad) continue;
+            failed++;
+            var why = res.Error ?? res.Lines.FirstOrDefault(l => l.StartsWith("Error:", StringComparison.Ordinal)) ?? "";
+            Console.WriteLine($"  NO-ERROR FAIL: {tc.Cmd} -> {why}");
+        }
+        Console.WriteLine(failed == 0
+            ? $"NO-ERROR SMOKE OK: {cases.Length}/{cases.Length} cases"
+            : $"NO-ERROR SMOKE: {cases.Length - failed}/{cases.Length} cases passed");
+        return failed;
+    }
+
+    // 新接口类型最小行为：Eth-Trunk / LoopBack / Tunnel（能进视图、description/shutdown、进 dis cu、display this）
+    static int NewIfaceSelfTest()
+    {
+        var cases = new (string Label, string[] Lines, string IfName, string Desc)[]
+        {
+            ("eth-trunk", new[] { "system-view", "interface Eth-Trunk 1", "description trunk1", "shutdown" }, "Eth-Trunk1", "trunk1"),
+            ("loopback", new[] { "system-view", "interface LoopBack 0", "description lo0" }, "LoopBack0", "lo0"),
+            ("tunnel", new[] { "system-view", "interface Tunnel 5", "description tun5" }, "Tunnel5", "tun5"),
+        };
+        var failed = 0;
+        foreach (var tc in cases)
+        {
+            var dev = Device.Factory();
+            var sess = new Session { Dev = dev };
+            var last = new ExecResult();
+            foreach (var line in tc.Lines) { last = Cli.Execute(dev, sess, sess.Commands(), Tokenize(line)); if (last.Error != null) break; }
+            var ok = last.Error == null && sess.View == "iface" && sess.Prompt() == "[HUAWEI-" + tc.IfName + "]";
+            var cfg = dev.RenderConfig();
+            ok = ok && cfg.Contains("interface " + tc.IfName) && cfg.Contains(" description " + tc.Desc);
+            var dt = Cli.Execute(dev, sess, sess.Commands(), Tokenize("display this"));
+            ok = ok && dt.Error == null && dt.Lines.Contains("interface " + tc.IfName);
+            if (ok) continue;
+            failed++;
+            Console.WriteLine($"  NEW IFACE FAIL: {tc.Label} -> err={last.Error} view={sess.View} prompt={sess.Prompt()} cfg={(cfg.Contains("interface " + tc.IfName))}");
+        }
+        // 非法编号必须报错
+        var dev2 = Device.Factory();
+        var sess2 = new Session { Dev = dev2 };
+        Cli.Execute(dev2, sess2, sess2.Commands(), Tokenize("system-view"));
+        var bad = Cli.Execute(dev2, sess2, sess2.Commands(), Tokenize("interface Eth-Trunk 200"));
+        if (bad.Error == null && !bad.Lines.Any(l => l.StartsWith("Error:", StringComparison.Ordinal)))
+        {
+            failed++;
+            Console.WriteLine("  NEW IFACE FAIL: Eth-Trunk 200 应当报错");
+        }
+        Console.WriteLine(failed == 0
+            ? $"NEW IFACES OK: {cases.Length + 1}/{cases.Length + 1} cases"
+            : $"NEW IFACES: {cases.Length + 1 - failed}/{cases.Length + 1} cases passed");
+        return failed;
+    }
+
+    // `?` 两列排版回归（v1.5.0）：列宽 = 最长候选 + 2、说明对齐第二列、命令位置无 <cr>、超宽折行
+    static int HelpFormatSelfTest()
+    {
+        var cases = new (string View, string Text, string Word, string Help)[]
+        {
+            ("system", "interface ", "Eth-Trunk", "Ethernet-Trunk interface"),
+            ("system", "acl ", "number", "Specify a numbered ACL"),
+            ("system", "acl ", "INTEGER<2000-2999>", "Basic access-list"),
+            ("system", "info-center ", "channel", "Set the name of information channel"),
+            ("system", "user-interface ", "INTEGER<0,34-48,50-54>", "The first user terminal interface"),
+            ("system", "vlan ", "batch", "Batch process"),
+            ("system", "snmp-agent trap ", "life", "Set the trap aging time"),
+            ("aaa", "local-user u ", "password", "Set password"),
+            ("acl", "rule 5 deny tcp destination-port ", "eq", "Equal to given port number"),
+            ("iface", "port link-type ", "access", "Access port"),
+            ("ui", "authentication-mode ", "aaa", "AAA authentication"),
+            ("system", "aaa ", "<cr>", ""),
+        };
+        var failed = 0;
+        var dev = Device.Factory();
+        for (var ci = 0; ci < cases.Length; ci++)
+        {
+            var tc = cases[ci];
+            // 与 PrintHelp 相同的拆分：命令前缀 + 最后一段 partial
+            var before = tc.Text.Substring(0, tc.Text.Length - (tc.Text.EndsWith(" ") ? 0 : 1));
+            var toks = Tokenize(before);
+            List<string> prior; string partial;
+            if (tc.Text.EndsWith(" ")) { prior = toks; partial = ""; }
+            else { partial = toks.Count > 0 ? toks[^1] : ""; prior = toks.Take(Math.Max(0, toks.Count - 1)).ToList(); }
+            var cands = Cli.Complete(dev, CommandSets.For(tc.View), prior, partial, true);
+            var rows = cands.Where(c => c.Word.Length > 0).ToList();
+            if (tc.Word == "<cr>")
+            {
+                // 命令位置可回车时，数据层有 <cr>，排版层必须剥掉
+                var crLines = HelpFormat.Format(cands, 120);
+                if (!cands.Any(c => c.Word.Length == 0) || crLines.Any(l => l.Contains("<cr>")))
+                {
+                    failed++;
+                    Console.WriteLine($"  HELP FORMAT FAIL: [{tc.View}] '{tc.Text}' -> <cr> 处理不对");
+                }
+                continue;
+            }
+            var lines = HelpFormat.Format(cands, 120);
+            var detail = "";
+            if (rows.Count == 0) detail = "no candidates";
+            else if (lines.Any(l => l.Contains("<cr>"))) detail = "<cr> 不应出现";
+            else if (lines.Any(l => l.Length > 2 && l[0] == ' ' && l[1] == ' ' && l[2] == ' ')) detail = "首列前导空格不对";
+            else
+            {
+                var firstCol = rows.Max(c => c.Word.Length) + 2;
+                var col = 2 + firstCol;
+                // 每行：无说明时整行等于 "  word"（不留尾空格）；有说明时说明从第二列开始
+                for (var i = 0; i < rows.Count; i++)
+                {
+                    var c = rows[i];
+                    var help = (c.Help ?? "").Trim();
+                    if (help.Length == 0)
+                    {
+                        if (lines[i] != "  " + c.Word) { detail = $"空说明行有尾空格: [{lines[i]}]"; break; }
+                        continue;
+                    }
+                    if (lines[i].IndexOf(help, StringComparison.Ordinal) != col)
+                    {
+                        detail = $"说明未对齐第二列({col}): [{lines[i]}] help=[{help}]";
+                        break;
+                    }
+                }
+                if (detail.Length == 0)
+                {
+                    var idx = rows.FindIndex(c => c.Word == tc.Word);
+                    if (idx < 0) detail = "找不到候选 " + tc.Word;
+                    else if (tc.Help.Length > 0 && !lines[idx].Contains(tc.Help)) detail = $"期望说明[{tc.Help}] 实际[{lines[idx]}]";
+                }
+            }
+            if (detail.Length > 0)
+            {
+                failed++;
+                Console.WriteLine($"  HELP FORMAT FAIL: [{tc.View}] '{tc.Text}' -> {detail}");
+                continue;
+            }
+            // 窄缓冲区折行：续行缩进到第二列
+            if (ci == 3)   // info-center：statistic-suppress 说明较长
+            {
+                var narrow = HelpFormat.Format(cands, 60);
+                var firstCol = rows.Max(c => c.Word.Length) + 2;
+                var col = 2 + firstCol;
+                var wrappedIdx = rows.FindIndex(c => c.Word == "statistic-suppress");
+                if (wrappedIdx < 0) { failed++; Console.WriteLine("  HELP FORMAT FAIL: info-center 缺 statistic-suppress"); }
+                else
+                {
+                    var lineIdx = narrow.FindIndex(l => l.Contains("statistic-suppress"));
+                    var cont = narrow.Skip(lineIdx + 1).Take(3).ToList();
+                    if (lineIdx < 0 || cont.Count == 0 || !cont[0].StartsWith(new string(' ', col)))
+                    {
+                        failed++;
+                        Console.WriteLine($"  HELP FORMAT FAIL: 折行续行未对齐第二列(col={col})");
+                    }
+                }
+            }
+        }
+        Console.WriteLine(failed == 0
+            ? $"HELP FORMAT OK: {cases.Length}/{cases.Length} cases"
+            : $"HELP FORMAT: {cases.Length - failed}/{cases.Length} cases passed");
         return failed;
     }
 

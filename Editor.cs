@@ -138,9 +138,7 @@ public sealed class LineEditor
             return;
         }
         Console.WriteLine();
-        var w = cands.Max(c => c.Word.Length);
-        foreach (var c in cands)
-            Console.WriteLine("  " + (c.Word.Length == 0 ? "<cr>" : c.Word).PadRight(Math.Max(w, 4) + 2) + c.Help);
+        foreach (var line in HelpFormat.Format(cands)) Console.WriteLine(line);
         Console.WriteLine();
         prevLen = 0;
         Redraw(prompt, buf, pos, ref prevLen);

@@ -1,9 +1,31 @@
 namespace VrpSim;
 
-public abstract record Tok;
-public sealed record Lit(string W, string Help = "") : Tok;
-public sealed record Val(string Name, string Hint, Func<Device, string, IEnumerable<Candidate>>? Sug = null, Func<string, bool>? Accept = null,
-    Func<Device, string, IReadOnlyDictionary<string, string>, IEnumerable<Candidate>>? CSug = null, bool NoHint = false) : Tok;
+public interface Tok { }
+
+// Lit/Val 用可变类：帮助文案由 CommandSets 的静态构造按视图统一补全（填 Lit.Help / Val.HintHelp）
+public sealed class Lit : Tok
+{
+    public string W;
+    public string Help;
+    public Lit(string w, string help = "") { W = w; Help = help; }
+}
+
+public sealed class Val : Tok
+{
+    public string Name;
+    public string Hint;
+    public Func<Device, string, IEnumerable<Candidate>>? Sug;
+    public Func<string, bool>? Accept;
+    public Func<Device, string, IReadOnlyDictionary<string, string>, IEnumerable<Candidate>>? CSug;
+    public bool NoHint;
+    public string HintHelp = "";
+
+    public Val(string name, string hint, Func<Device, string, IEnumerable<Candidate>>? sug = null, Func<string, bool>? accept = null,
+        Func<Device, string, IReadOnlyDictionary<string, string>, IEnumerable<Candidate>>? csug = null, bool noHint = false)
+    {
+        Name = name; Hint = hint; Sug = sug; Accept = accept; CSug = csug; NoHint = noHint;
+    }
+}
 public sealed record Opt(params Tok[] Inner) : Tok;
 public sealed record Rep(Tok Inner, int Max = 64) : Tok;
 public sealed record Candidate(string Word, string Help);
@@ -125,6 +147,12 @@ public static class Cli
         _ => "?"
     };
 
+    // 候选说明兜底：Lit/Val 未写帮助时按候选词查（CommandSets 静态构造里注册）
+    public static Func<string, string?>? CandHelp;
+    static string HelpOr(string own, string word) => own.Length > 0 ? own : (CandHelp?.Invoke(word) ?? "");
+
+    static Candidate WithHelp(Candidate c) => c.Help.Length > 0 ? c : c with { Help = CandHelp?.Invoke(c.Word) ?? "" };
+
     static void Next(Device dev, State s, string partial, bool help, List<Candidate> outp, int depth)
     {
         if (depth > 48) return;
@@ -140,19 +168,19 @@ public static class Cli
         switch (t)
         {
             case Lit l:
-                if (l.W.StartsWith(partial, StringComparison.OrdinalIgnoreCase)) outp.Add(new Candidate(l.W, l.Help));
+                if (l.W.StartsWith(partial, StringComparison.OrdinalIgnoreCase)) outp.Add(new Candidate(l.W, HelpOr(l.Help, l.W)));
                 break;
             case Val v:
-                if (help && partial.Length == 0 && !v.NoHint) outp.Add(new Candidate(v.Hint, ""));
+                if (help && partial.Length == 0 && !v.NoHint) outp.Add(new Candidate(v.Hint, HelpOr(v.HintHelp, v.Hint)));
                 if (v.CSug != null)
                 {
                     foreach (var c in v.CSug(dev, partial, s.Caps))
-                        if (c.Word.StartsWith(partial, StringComparison.OrdinalIgnoreCase)) outp.Add(c);
+                        if (c.Word.StartsWith(partial, StringComparison.OrdinalIgnoreCase)) outp.Add(WithHelp(c));
                 }
                 else if (v.Sug != null)
                 {
                     foreach (var c in v.Sug(dev, partial))
-                        if (c.Word.StartsWith(partial, StringComparison.OrdinalIgnoreCase)) outp.Add(c);
+                        if (c.Word.StartsWith(partial, StringComparison.OrdinalIgnoreCase)) outp.Add(WithHelp(c));
                 }
                 break;
             case Opt o:
@@ -173,7 +201,7 @@ public static class Cli
         {
             foreach (var c in cmds)
                 if (c.Kw.StartsWith(partial, StringComparison.OrdinalIgnoreCase))
-                    outp.Add(new Candidate(c.Kw, c.Help));
+                    outp.Add(new Candidate(c.Kw, HelpOr(c.Help, c.Kw)));
             return DedupCands(outp);
         }
         var matched = cmds.Where(c => c.Kw.StartsWith(before[0], StringComparison.OrdinalIgnoreCase)).ToList();

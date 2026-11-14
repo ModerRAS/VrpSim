@@ -5,7 +5,7 @@
 按 2026-11-12 / 11-13 两台现场配置（V200R011C10SPC600）写的**可交互 CLI 模拟器**：
 Tab 补全、`?` 帮助、缩写执行、视图切换、`display current-configuration` / `display this` 还原、
 `interface range` 批量配置、`port-group` 端口组、外加 14 项加固自查评分。
-C# / .NET 10 实现，无第三方依赖，发布为单文件 exe。
+C# / .NET 10 实现，无第三方依赖，发布为 **NativeAOT 原生单文件 exe**（约 3.5 MB，不需要 .NET 运行时）。
 
 ## 快速开始
 
@@ -20,13 +20,16 @@ dist\VrpSim.exe
 - 交互模式**退出时自动存档**到 exe 同目录的 `vrp-sim-state.json`，下次启动自动恢复；
   `--fresh` 强制新开局，`--persist` 让批处理模式也存档，`reset` 在用户视图恢复出厂配置
 
+**运行要求**：`dist/VrpSim.exe` 是 NativeAOT 原生 exe（x86，32/64 位 Windows 均可直接跑；无 .NET 运行时依赖，系统自带 UCRT 即可）；
+从源码构建/发布需要 .NET 10 SDK（release.yml 用 `dotnet publish -r win-x64 -p:PublishAot=true`，CI 的 windows-latest 自带 MSVC C++ 工具链）。
+
 命令行参数：
 
 | 参数 | 作用 |
 | --- | --- |
 | （无） | 交互模式，Tab / ? / 方向键 / 历史可用 |
 | `--batch` | 从标准输入读命令（脚本、管道测试用），不要求 TTY，不启用登录 |
-| `--selftest` | 内置"整套加固 → 14 项自查 + 74 条逐 token 补全快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图回归"，全过返回 0（输出 `SELFTEST OK`） |
+| `--selftest` | 内置"整套加固 → 14 项自查 + 90 条逐 token 补全快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图/全接口 dis cu/无报错冒烟/新接口类型/HELP FORMAT 回归"，全过返回 0（输出 `SELFTEST OK`） |
 | `--no-login` | 跳过 console 登录（配合 --batch） |
 | `--fresh` | 忽略上次存档，按出厂状态重新开始 |
 | `--persist` | 批处理模式也读写 `vrp-sim-state.json`（默认只有交互模式存档） |
@@ -41,12 +44,32 @@ dist\VrpSim.exe
 .\dist\VrpSim.exe --view system --complete "snmp-agent comm"
 ```
 
+## 发布产物（NativeAOT，v1.5.0 起）
+
+Release **只发一份 x86 原生单文件** `VrpSim.exe`（约 3.1 MB，冷启动 ~26 ms）：**32 位 Windows 与 64 位 Windows（WOW64）都能直接跑**，
+不需要 .NET 运行时；AOT 会额外产生 PDB，不随发布上传。
+
+| 资产 | 架构 | 体积 | 冷启动（本机 10 次均值） | 说明 |
+| --- | --- | --- | --- | --- |
+| `VrpSim.exe` | win-x86 | 约 3.12 MB | ~26 ms | 32 位 Windows / 64 位 Windows WOW64 均可用 |
+| `VrpSim.exe.sha256` | — | — | — | 对应资产的 SHA-256 校验 |
+
+对照：旧 self-contained 单文件 37.6 MB、trimmed 单文件 11.3 MB——AOT 小 12×/3.6×，冷启动也快 3.8×。
+**需要 x64 原生版**可本地自建（CI 不再上传 x64 资产）：
+
+```powershell
+dotnet publish VrpSim.csproj -c Release -r win-x64 --self-contained true -p:PublishAot=true -p:StripSymbols=true -p:DebugType=None -o out
+```
+
+（本机 `dist/VrpSim.exe` 与 Release 同口径：x86 AOT、约 3.14 MB、无需 .NET 运行时。发布需 .NET 10 SDK + MSVC C++ 工具链；
+本机 VS2026 若未被 ILCompiler 自动发现，先 `call vcvarsall.bat x86` 并加 `-p:IlcUseEnvironmentalTools=true`。）
+
 ## 键位
 
 | 键 | 行为 |
 | --- | --- |
 | `Tab` | 补全当前词：唯一候选直接补全并加空格；多个候选列出后保留输入 |
-| `?` | 显示当前位置所有候选（帮助模式下含 `<cr>` 和参数占位符，占位符排在候选值前面） |
+| `?` | 显示当前位置所有候选：**两列布局**（候选 + 英文说明，与真机 console 一致），参数占位符排在候选值前面；命令行位置不显示 `<cr>` |
 | `←` `→` `Home` `End` | 移动光标 |
 | `↑` `↓` | 历史命令 |
 | `Backspace` `Delete` | 删除 |
@@ -57,7 +80,9 @@ dist\VrpSim.exe
 关键字命中后按**规范全称**执行（`dis cu` 可用）。参数位置给候选：接口类型、已建 ACL、本地用户、VLAN、read/write、端口组名等。
 接口输入**只接受"类型 + 编号"分开写**：`interface GigabitEthernet 0/0/1`、`interface Vlanif 8`、`interface Ethernet 0/0/1`；
 `interface Ethernet0/0/1` / `interface Vlanif8` 这类连写在真机上直接报 `Wrong parameter found at '^' position.`（^ 指向连写 token），模拟器同口径。
-接口类型要写全称（`Ethernet` / `GigabitEthernet` / `Vlanif` / `NULL`，大小写不限），`Eth 0/0/1` 这种缩写不认；
+接口类型要写全称（`Eth-Trunk` / `Ethernet` / `GigabitEthernet` / `LoopBack` / `NULL` / `Tunnel` / `Vlanif`，大小写不限），`Eth 0/0/1` 这种缩写不认；
+`Eth-Trunk` / `LoopBack` / `Tunnel` 按真机是"进视图即创建"（编号范围分别 0-127 / 0-1023 / 0-1023，越界报错），进 dis cu 与 `display this` 正常；
+`interface range` 只支持批量可配的 `Ethernet` / `GigabitEthernet` / `Vlanif` 三种；
 **NULL 接口**：候选只出类型 `NULL`；`interface NULL 0` 与 `interface NULL0` 两种写法都接受，都进 `[HUAWEI-NULL0]`，
 `display this` 与配置渲染输出 `interface NULL0`（编号只允许 0，其它编号报错）；
 `interface range` 两端类型可混用大小写（`interface range ethernet 0/0/1 to Ethernet 0/0/16` 合法），进视图与配置渲染统一成规范拼写
@@ -65,16 +90,36 @@ dist\VrpSim.exe
 
 ### 补全快照（第一批：加固/配置演练路径）
 
-`Tab` / `?` 已按真机口径逐 token 补齐（覆盖 `演练脚本-14项.txt` 的约 60 条路径；`--selftest` 内置 74 条逐 token 快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图回归）。代表性位置：
+`Tab` / `?` 已按真机口径逐 token 补齐（覆盖 `演练脚本-14项.txt` 的约 60 条路径；`--selftest` 内置 90 条逐 token 快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图/全接口 dis cu/无报错冒烟/新接口类型/HELP FORMAT 回归）。代表性位置：
 
 | 输入 | `Tab`（无占位符） | `?`（含类型占位符） |
 | --- | --- | --- |
 | `sysname ` | （自由文本） | `STRING<1-246>` |
-| `interface ` | `range` `Ethernet` `GigabitEthernet` `Vlanif` `NULL`（顺序固定，**不列具体接口名**） | 同左（不显示占位符） |
+| `interface ` | `range` `Eth-Trunk` `Ethernet` `GigabitEthernet` `LoopBack` `NULL` `Tunnel` `Vlanif`（顺序固定，**不列具体接口名**） | 同左（不显示占位符） |
 | `interface ethernet` | 唯一补成 `Ethernet` | — |
 | `interface Vlanif ` | `1` `8`（按 VLAN 给） | `<interface-number>` + VLAN 号 |
 | `interface NULL ` | `0`（NULL 只有编号 0） | `<interface-number>` + `0` |
-| `interface range ` | 同 4 种接口类型（不列具体接口名） | 同左 |
+| `interface range ` | `Ethernet` `GigabitEthernet` `Vlanif`（不列具体接口名） | 同左 |
+| `info-center ` | `channel` `console` `enable` `filter-id` `local` `logbuffer` `loghost` `monitor` `rate-limit` `snmp` `source` `statistic-suppress` `timestamp` `trapbuffer` | 同左 |
+| `info-center loghost ` | `ipv6` `source` | `<X.X.X.X>` `ipv6` `source` |
+| `acl ` | `ipv6` `name` `number` + 已建 ACL 号 | `INTEGER<2000-2999>` `INTEGER<3000-3999>` `INTEGER<4000-4999>` `INTEGER<5000-5999>` `ipv6` `name` `number` |
+| `user-interface ` | `console` `current` `maximum-vty` `vty` | 同左 + `INTEGER<0,34-48,50-54>` |
+| `snmp-agent sys-info ` | `contact` `location` `version` | 同左 |
+| `snmp-agent target-host ` | `inform` `trap` | 同左 |
+| `snmp-agent trap ` | `disable` `enable` `life` `queue-size` `source` `suppress` `type` | 同左 |
+| `stelnet ` | `server` `ipv4` `ipv6` | 同左 + `STRING<1-255>` |
+| `rsa ` | `local-key-pair` `peer-public-key` | 同左 |
+| `aaa ` | `abnormal-offline-record` `offline-record` `online-fail-record` | 同左 + `<cr>`（排版层不显示） |
+| `snmp-agent ` | `community` `extend` `group` `inform` `local-engineid` `manner` `mib-view` `notification-log` `notify-filter-profile` `packet` `packet-priority` `set-cache` `sys-info` `target-host` `trap` `usm-user` | 同左（各带英文说明） |
+| `aaa local-user <u> ` | `access-limit` `ftp-directory` `idle-timeout` `password` `privilege` `service-type` `state` | 同左 |
+| `aaa local-user <u> password ` | `cipher` `irreversible-cipher` `simple` | 同左 |
+| `aaa local-user <u> service-type ` | `8021x` `bind` `ftp` `http` `ppp` `ssh` `telnet` `terminal` `web` `x25-pad` | 同左 |
+| `acl rule <id> deny tcp ` | `destination` `destination-port` `dscp` `fragment` `logging` `precedence` `source` `source-port` `tcp-flag` `time-range` `tos` | 同左 |
+| `acl rule <id> permit source ` | `any` | `<X.X.X.X>` + `any` |
+| `acl description ` / `iface description ` / `vlan description ` | — | `TEXT`（带各自长度说明） |
+| `iface port ` | `add-tag` `discard` `hybrid` `link-flap` `link-type` `mux-vlan` `priority` `type` `vlan-mapping` `vlan-stacking` | 同左 |
+| `iface port link-type ` | `access` `dot1q-tunnel` `hybrid` `trunk` | 同左 |
+| `ui acl ` | `ipv6` + 已建 ACL 号 | `INTEGER<2000-3999>` + `ipv6` |
 | `interface range ethernet ` | `0/0/1` … `0/0/16`（类型大小写不限） | `<interface-number>` |
 | `interface range Ethernet 0/0/1 to Ethernet ` | `0/0/1` … `0/0/16` | `<interface-number>` |
 | `vlan ` | `batch`（唯一，不自动插数字） | `batch` + `INTEGER<1-4094>`（batch 在前） |
@@ -97,16 +142,38 @@ dist\VrpSim.exe
 占位符记法统一为 `INTEGER<范围>` / `STRING<长度>` / `{a|b|c}`；参数候选按上下文生成（接口号→VLAN 号或端口号、
 ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` 直接报 `Unrecognized command`）。
 
+`?` / Tab 候选按真机 console 格式输出：**两列**（第一列宽 = 本表最长候选 + 2，第二列是英文说明），说明超宽按控制台宽度折行、
+续行缩进对齐第二列；命令行位置**不显示 `<cr>`**；列表结束后只空一行再重绘提示符。示例（`interface ?`）：
+
+```
+[HUAWEI]interface ?
+  range            Set interface range
+  Eth-Trunk        Ethernet-Trunk interface
+  Ethernet         Ethernet interface
+  GigabitEthernet  GigabitEthernet interface
+  LoopBack         LoopBack interface
+  NULL             NULL interface
+  Tunnel           Tunnel interface
+  Vlanif           Vlan interface
+[HUAWEI]interface
+```
+
+说明文字按 eNSP 真机 transcripts 校准（如 `INTEGER<2000-2999>  Basic access-list(add to current using rules)`、
+`life  Set the trap aging time`）；`--selftest` 的 HELP FORMAT 回归守住列宽/说明对齐/无 `<cr>`/折行。
+
+`display current-configuration` 按真机口径打印**全部接口**（16×Ethernet0/0/1-16、12×GigabitEthernet0/0/1-12、Vlanif1、NULL0），
+空口也输出 `#` / `interface X` / `#` 空块；`display current-configuration | include interface` 可过滤出全部接口行。
+
 ## 覆盖的命令（按视图）
 
 | 视图 | 命令 |
 | --- | --- |
 | 用户 `<HUAWEI>` | `system-view`、`quit`、`return`、`display …`、`save`、`check`、`reset` |
-| 系统 `[HUAWEI]` | `sysname`、`aaa`、`acl [number] <2000-3999>`（两种写法都行）、`interface <类型> <编号>`（**必须分开写**，连写报错）、`interface range <类型> <编号> to <类型> <编号>`、`port-group <名>`、`vlan batch <id…>`、`vlan <id>`（进 VLAN 视图）、`stelnet (ipv4/ipv6) server enable`、`ssh client first-time`、`ssh user`、`snmp-agent`（community / sys-info version / target-host / trap enable）、`info-center (enable / loghost)`、`clock timezone`、`clock datetime`、`user-interface con/vty`、`undo …` |
-| AAA `[HUAWEI-aaa]` | `local-user <u> password cipher/irreversible-cipher <pw> [privilege level <n>]`（一条命令可带权限；`service-type` 必须另起一条）、`local-user <u> privilege level`、`local-user <u> service-type`、`local-aaa-user wrong-password`、`local-aaa-user password policy administrator`、`user-password complexity-check`、`undo local-user` |
+| 系统 `[HUAWEI]` | `sysname`、`aaa`（含 abnormal/offline/online-fail-record 子命令）、`acl [number] <2000-5999>`（2000-2999/3000-3999/4000-4999/5000-5999 四段 + `ipv6`/`name` 写法）、`interface <类型> <编号>`（**必须分开写**，连写报错；类型见上，Eth-Trunk/LoopBack/Tunnel 进视图即创建）、`interface range <类型> <编号> to <类型> <编号>`、`port-group <名>`、`vlan batch <id…>`、`vlan <id>`（进 VLAN 视图）、`stelnet (ipv4/ipv6) server enable` / `stelnet <IP>`、`rsa local-key-pair create` / `rsa peer-public-key`、`ssh client first-time`、`ssh user`、`snmp-agent`（community / sys-info contact\|location\|version / target-host inform\|trap / trap disable\|enable\|life\|queue-size\|source\|suppress\|type / extend / group / inform / local-engineid / manner / mib-view / notification-log / notify-filter-profile / packet / packet-priority / set-cache / usm-user）、`info-center`（channel/console/enable/filter-id/local/logbuffer/loghost/monitor/rate-limit/snmp/source/statistic-suppress/timestamp/trapbuffer）、`clock timezone`、`clock datetime`、`user-interface [<整数>\|console\|current\|maximum-vty\|vty]`、`undo …` |
+| AAA `[HUAWEI-aaa]` | `local-user <u> password cipher/irreversible-cipher/simple <pw> [privilege level <n>]`（一条命令可带权限；`service-type` 必须另起一条）、`local-user <u> privilege level`、`local-user <u> service-type`（8021x/bind/ftp/http/ppp/ssh/telnet/terminal/web/x25-pad）、`local-user <u> access-limit`/`ftp-directory`/`state`（接受不落配置）、`local-aaa-user wrong-password`、`local-aaa-user password policy administrator`、`user-password complexity-check`、`undo local-user` |
 | 本地管理员密码策略 `[HUAWEI-aaa-lupp-admin]` | `password expire <0-999>`、`password history record number <0-5>`、`display this`、`undo …`（`quit` 回 AAA 视图） |
-| ACL `[HUAWEI-acl-adv-3000]` | `rule [<id>] permit/deny [ip \| source <IP> <wildcard> \| <tcp/udp> destination-port eq/gt/lt/range …]`、`description`、`undo rule` |
-| 接口 `[HUAWEI-GigabitEthernet0/0/1]` | `description`、`port link-type`、`port default vlan`、`port trunk allow-pass vlan`、`traffic-filter inbound/outbound acl`、`shutdown` / `undo shutdown`、`ip address`（仅 Vlanif）、`display this` |
+| ACL `[HUAWEI-acl-adv-3000]` | `rule [<id>] permit/deny [ip \| <gre/icmp/igmp/ipinip/ospf/tcp/udp> [source/destination <IP> <wildcard> \| source-port/destination-port eq/gt/lt/range … \| dscp/precedence/tos/tcp-flag/time-range/fragment/logging]]`、`rule <id> description`、`description TEXT`、`undo rule` |
+| 接口 `[HUAWEI-GigabitEthernet0/0/1]` | `description TEXT`、`port link-type`（access/dot1q-tunnel/hybrid/trunk）、`port default vlan`、`port trunk allow-pass vlan`、`port add-tag/discard/hybrid/link-flap/mux-vlan/priority/type/vlan-mapping/vlan-stacking`（接受不落配置）、`traffic-filter inbound/outbound acl`、`shutdown` / `undo shutdown`、`ip address`（仅 Vlanif）、`ip source`（接受）、`display this` |
 | 接口范围 `[HUAWEI-port-group]`（模拟器扩展） | 用 `interface range <类型> <编号> to <类型> <编号>` 进入（两端类型可混用大小写），支持 `shutdown`、`description`、`port …`、`traffic-filter …` 与对应 `undo` 批量生效；`ip address` 不支持 |
 | 端口组 `[HUAWEI-port-group-<名>]` | `group-member <接口> [to <接口2>]`、`undo group-member [<接口>]`，以及接口视图的 `shutdown` / `description` / `port …` / `traffic-filter …` 批量作用于成员口 |
 | VLAN `[HUAWEI-vlan<id>]` | `description <text>`、`name <text>`、`undo description`、`undo name`、`display this`；`quit` 回系统视图；`vlan <id>` 已存在直接进、不存在则创建。`display this` 真机口径：**空 VLAN 只有 `#` + `return`**；有 description/name 才是 `#` / `vlan 200` / ` description …` / `#` / `return`（1 空格缩进） |
@@ -194,11 +261,21 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 - 配置持久化（`vrp-sim-state.json`）是模拟器专有行为：真机重启后未 `save` 的配置会丢，这里交互模式退出会自动存档
 - 只覆盖加固演练要用的命令子集；`display` 的详细接口统计、`debug`、`reset` 之外的系统维护命令都没有
 - 补全快照（第一批）只覆盖加固/配置演练路径（约 60 条），其余命令的候选/占位符留待后续批次调整
+- `?` 候选按"真机能看到的都补"原则处理：**有语义的落配置**（如 interface 类型创建、SNMP contact/location、trap enable/disable、ACL 区间）；
+  **暂无语义的只做到"可见 + 敲了不报错"**（如 info-center 多数子命令、acl ipv6/name、user-interface maximum-vty、snmp trap life/queue-size/source/suppress/type），
+  这些命令不会进 `display current-configuration`（自检里用 74 条"无报错冒烟"守着）
+- 接口 `Eth-Trunk` / `LoopBack` / `Tunnel` 只实现"进视图即创建 + description/shutdown/dis cu/display this"最小行为，链路聚合/VPN 隧道语义不模拟
 - `interface` 只接受"类型 + 编号"分开写（真机口径）；配置回显仍是连写形式（`interface GigabitEthernet0/0/1`），这两者不矛盾
+- **MEth 不建模**（用户口径：16 个百兆 + 12 个千兆，不模拟管理口），`interface ?` 不显示 MEth；eNSP S5700 的那台 24GE 机型才会有
+- `?` 排版层不显示 `<cr>`（数据层保留可回车判定；真机 eNSP 会在可回车位置列出 `<cr>`，用户反馈"开头有不是表格的东西"后按两列格式统一去掉）
+- v1.5.0 第二批按 gap 报告补的候选里，`snmp-agent` 的 extend/group/mib-view/…、`local-user` 的 access-limit/ftp-directory/state、
+  ACL 的 fragment/logging/time-range/tcp-flag 等**只做到"可见 + 敲了不报错"**，不落配置也不影响 `check` 评分；`port dot1q-tunnel` 仅记录 link-type 值，QinQ 语义不模拟
 - VLAN 视图只实现 `description` / `name` 最小集，真机的 `statistics`、`mac-vlan` 等未实现
 - `group-member` 仍按"完整接口名"输入与候选（如 `group-member GigabitEthernet0/0/1`），与 `interface` 的新口径暂不一致，待确认
 - **eNSP 版本差异**：eNSP 内置 S5700 是 **V200R001C00 / VRP 5.110**（2016 年前后），比真机 **V200R011C10SPC600** 老 6+ 代；
-  本模拟器的接口写法/候选/VLAN 视图等口径以**用户真机 V200R011**为准，eNSP 只作旁证（两者命令行文案、默认值可能有出入，冲突不要照抄 eNSP）
+  本模拟器的接口写法/候选/VLAN 视图等口径以**用户真机 V200R011**为准，eNSP 只作旁证（两者命令行文案、默认值可能有出入，冲突不要照抄 eNSP）。
+  已知具体差异：eNSP 这代没有 `Ethernet` 接口类型、`GigabitEthernet` 只认连写、没有 `interface range`、`acl` 区间与 `info-center` 子命令集合也不同——
+  本模拟器保留用户现场口径的 `Ethernet` 与"类型 编号分开写"，不照搬 eNSP
 
 ## 扩展
 
@@ -216,10 +293,12 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 | `Commands.cs` | 9 个视图的命令定义与处理函数（含 port-group / interface range） |
 | `Checks.cs` | 14 项加固判定与报告 |
 | `Editor.cs` | 行编辑器（Tab/?/方向键/历史） |
-| `Program.cs` | 启动、console 登录、批处理、自检脚本（含 74 条逐 token 快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图回归） |
+| `Program.cs` | 启动、console 登录、批处理、自检脚本（含 90 条逐 token 快照 + 顺序/大小写混用/接口写法/NULL 写法/VLAN 视图/全接口/无报错冒烟/新接口类型/HELP FORMAT 回归） |
+| `HelpFormat.cs` | `?`/Tab 候选排版：两列 + 说明折行 + 命令位置去 `<cr>` |
 | `StateStore.cs` | 交互存档 `vrp-sim-state.json` 的读写 |
 | `演练脚本-14项.txt` | 可直接粘进模拟器的整套加固命令 |
 | `saved-config.cfg` | `save` 落盘的当前配置（运行时生成） |
-| `dist/VrpSim.exe` | 发布产物（单文件，需 .NET 10 运行时） |
+| `dist/VrpSim.exe` | 本地发布产物（NativeAOT **x86** 原生单文件，无需 .NET 运行时；32/64 位 Windows 均可跑，3.14 MB） |
+| `.github/workflows/release.yml` | Release：单资产 x86 AOT 发布（跑 selftest + 生成 sha256，PDB 不上传；x64 可本地自建） |
 
 Copyright (C) 2026 ModerRAS — GPL-3.0

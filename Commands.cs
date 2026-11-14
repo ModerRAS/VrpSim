@@ -60,16 +60,24 @@ public static class CommandSets
     static IEnumerable<Candidate> AclSug(Device d, string p) =>
         d.Acls.Keys.OrderBy(k => k).Select(k => new Candidate(k.ToString(), ""));
 
-    static IEnumerable<Candidate> IfKindSug(Device d, string p)
+    // interface 可输入的类型（真机/eNSP 候选；Ethernet 按用户现场口径保留）
+    static readonly string[] IfKinds = { "Eth-Trunk", "Ethernet", "GigabitEthernet", "LoopBack", "NULL", "Tunnel", "Vlanif" };
+    // interface range 只用能批量配置的类型（模拟器扩展命令）
+    static readonly string[] IfRangeKinds = { "Ethernet", "GigabitEthernet", "Vlanif" };
+
+    static IEnumerable<Candidate> IfKindSug(Device d, string p) => KindSug(IfKinds, p);
+    static IEnumerable<Candidate> IfRangeKindSug(Device d, string p) => KindSug(IfRangeKinds, p);
+
+    static string KindHelp(string k) => k switch
     {
-        var kinds = new (string Word, string Help)[]
-        {
-            ("Ethernet", "Ethernet interface"), ("GigabitEthernet", "GigabitEthernet interface"),
-            ("Vlanif", "VLAN interface"), ("NULL", "NULL interface")
-        };
-        return kinds.Where(k => k.Word.StartsWith(p, StringComparison.OrdinalIgnoreCase))
-                    .Select(k => new Candidate(k.Word, k.Help));
-    }
+        "Eth-Trunk" => "Ethernet-Trunk interface",
+        "Vlanif" => "Vlan interface",
+        _ => k + " interface"
+    };
+
+    static IEnumerable<Candidate> KindSug(string[] kinds, string p) =>
+        kinds.Where(k => k.StartsWith(p, StringComparison.OrdinalIgnoreCase))
+             .Select(k => new Candidate(k, KindHelp(k)));
 
     static IEnumerable<Candidate> IfNumSug(Device d, string p)
     {
@@ -88,12 +96,15 @@ public static class CommandSets
     static bool IsIfNumToken(string t) => t.Length > 0 && t.All(ch => char.IsDigit(ch) || ch == '/');
 
     static bool IsIfaceKindToken(string t) =>
-        new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL" }.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
+        IfKinds.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
+
+    static bool IsRangeKindToken(string t) =>
+        IfRangeKinds.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
 
     // 类型+编号连写（Ethernet0/0/1、GigabitEthernet0/0/1、Vlanif8）——真机输入不认
     static bool IsConcatIfaceToken(string t)
     {
-        foreach (var k in new[] { "Ethernet", "GigabitEthernet", "Vlanif" })
+        foreach (var k in IfKinds.Where(x => x != "NULL"))
         {
             if (t.Length <= k.Length || !t.StartsWith(k, StringComparison.OrdinalIgnoreCase)) continue;
             var ch = t[k.Length];
@@ -121,8 +132,9 @@ public static class CommandSets
             return new[] { new Candidate("0", "") };
         if ("Vlanif".StartsWith(kind, StringComparison.OrdinalIgnoreCase) || kind.StartsWith("Vlanif", StringComparison.OrdinalIgnoreCase))
             return d.Vlans.OrderBy(v => v).Select(v => new Candidate(v.ToString(), ""));
-        var prefix = new[] { "Ethernet", "GigabitEthernet" }
-            .FirstOrDefault(k => k.StartsWith(kind, StringComparison.OrdinalIgnoreCase) || kind.StartsWith(k, StringComparison.OrdinalIgnoreCase));
+        var known = new[] { "Ethernet", "Eth-Trunk", "GigabitEthernet", "LoopBack", "Tunnel" };
+        var prefix = known.FirstOrDefault(k => k.Equals(kind, StringComparison.OrdinalIgnoreCase))
+                     ?? known.FirstOrDefault(k => kind.Length >= 3 && k.StartsWith(kind, StringComparison.OrdinalIgnoreCase));
         if (prefix == null) return Array.Empty<Candidate>();
         return d.Ifaces.Keys
             .Where(n => n.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
@@ -156,12 +168,14 @@ public static class CommandSets
 
     // 接口类型按真机口径要写全称（不接受 Eth/Gi 这种缩写），大小写不限
     static readonly Func<string, bool> IfKindAccept = t =>
-        new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL" }
-            .Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
+        IfKinds.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
+
+    static readonly Func<string, bool> IfRangeKindAccept = t =>
+        IfRangeKinds.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
 
     static string CanonIfaceKind(string k)
     {
-        foreach (var x in new[] { "Ethernet", "GigabitEthernet", "Vlanif", "NULL" })
+        foreach (var x in IfKinds)
             if (x.Equals(k, StringComparison.OrdinalIgnoreCase)) return x;
         return k;
     }
@@ -178,17 +192,24 @@ public static class CommandSets
 
     static readonly Val ValIf = new("if", "<interface>", IfSug);
     static readonly Val ValIp = new("ip", "<X.X.X.X>");
-    static readonly Val ValUser = new("name", "STRING<1-63>", UserSug);
+    static readonly Val ValUser = new("name", "STRING<1-64>", UserSug);
+    static Val VInt(string n, string hint) => new(n, hint, null, s => IsInt(s, out _));
+    static readonly Val AnyVal = new("x", "<text>", null, _ => true, null, true);
 
     static readonly Func<Device, string, IEnumerable<Candidate>> SugPermitDeny = (d, p) => SugOf(new[] { "permit", "deny" }, p);
     static readonly Func<Device, string, IEnumerable<Candidate>> SugTcpUdp = (d, p) => SugOf(new[] { "tcp", "udp" }, p);
-    static readonly Func<Device, string, IEnumerable<Candidate>> SugCipherMode = (d, p) => SugOf(new[] { "cipher", "irreversible-cipher" }, p);
-    static readonly Func<Device, string, IEnumerable<Candidate>> SugServices = (d, p) => SugOf(new[] { "terminal", "ssh", "telnet", "ftp", "http" }, p);
+    static readonly Func<Device, string, IEnumerable<Candidate>> SugCipherMode = (d, p) => SugOf(new[] { "cipher", "irreversible-cipher", "simple" }, p);
+    static readonly Func<Device, string, IEnumerable<Candidate>> SugServices = (d, p) =>
+        SugOf(new[] { "8021x", "bind", "ftp", "http", "ppp", "ssh", "telnet", "terminal", "web", "x25-pad" }, p);
     static readonly Val ValAclAction = new("action", "{permit|deny}", SugPermitDeny,
         t => t.Equals("permit", StringComparison.OrdinalIgnoreCase) || t.Equals("deny", StringComparison.OrdinalIgnoreCase));
-    static readonly Val ValProto = new("proto", "{tcp|udp}", SugTcpUdp,
-        t => t.Equals("tcp", StringComparison.OrdinalIgnoreCase) || t.Equals("udp", StringComparison.OrdinalIgnoreCase));
-    static readonly Val ValAclId = new("id", "INTEGER<1-65535>", null, s => IsInt(s, out _));
+    static readonly Func<Device, string, IEnumerable<Candidate>> SugProtos = (d, p) =>
+        SugOf(new[] { "gre", "icmp", "igmp", "ip", "ipinip", "ospf", "tcp", "udp" }, p);
+    static readonly string[] ProtoNames = { "gre", "icmp", "igmp", "ip", "ipinip", "ospf", "tcp", "udp" };
+    static readonly Val ValProto = new("proto", "{gre|icmp|igmp|ip|ipinip|ospf|tcp|udp}", SugProtos,
+        t => ProtoNames.Any(x => x.Equals(t, StringComparison.OrdinalIgnoreCase))
+             || (IsInt(t, out var pn) && pn >= 1 && pn <= 255));
+    static readonly Val ValAclId = new("id", "INTEGER<0-4294967294>", null, s => long.TryParse(s, out var v) && v >= 0 && v <= 4294967294);
     static readonly Val ValPort = new("port", "INTEGER<0-65535>", PortSug, s => IsInt(s, out _));
     static readonly Val ValWildcard = new("wc", "<wildcard>",
         (d, p) => new[] { new Candidate("0", "Wildcard bits : 0.0.0.0 (a host)"), new Candidate("X.X.X.X", "Wildcard of source") },
@@ -545,17 +566,27 @@ public static class CommandSets
     {
         C("sysname", "Set the system name", c => { c.Dev.SysName = c.Cap("name"); return Array.Empty<string>(); })
             .T(new Val("name", "STRING<1-246>")),
-        C("aaa", "Enter AAA view", c => { c.S.View = "aaa"; return Array.Empty<string>(); }).T(),
-        C("acl", "Enter ACL view", EnterAcl)
-            .T(new Lit("number", "ACL number"), new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)))
-            .T(new Lit("number", "ACL number"), new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)), new Lit("name"), new Val("nm", "STRING<1-64>"))
-            .T(new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)))
-            .T(new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)), new Lit("name"), new Val("nm", "STRING<1-64>")),
+        C("aaa", "Enter AAA view", AaaRun)
+            .T(new Lit("abnormal-offline-record"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("offline-record"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("online-fail-record"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(),
+        C("acl", "Enter ACL view", AclRun)
+            .T(new Val("num", "INTEGER<2000-2999>", AclSug, s => IsInt(s, out _)))
+            .T(new Val("num", "INTEGER<3000-3999>", AclSug, s => IsInt(s, out _)))
+            .T(new Val("num", "INTEGER<4000-4999>", AclSug, s => IsInt(s, out _)))
+            .T(new Val("num", "INTEGER<5000-5999>", AclSug, s => IsInt(s, out _)))
+            .T(new Lit("ipv6", "ACL IPv6"), new Opt(new Val("num", "INTEGER<2000-3999>", null, s => IsInt(s, out _))))
+            .T(new Lit("name", "Specify a named ACL"), new Val("nm", "STRING<1-64>"))
+            .T(new Lit("number", "Specify a numbered ACL"), new Val("num", "INTEGER<2000-2999>", AclSug, s => IsInt(s, out _)))
+            .T(new Lit("number", "Specify a numbered ACL"), new Val("num", "INTEGER<3000-3999>", AclSug, s => IsInt(s, out _)))
+            .T(new Lit("number", "Specify a numbered ACL"), new Val("num", "INTEGER<4000-4999>", AclSug, s => IsInt(s, out _)))
+            .T(new Lit("number", "Specify a numbered ACL"), new Val("num", "INTEGER<5000-5999>", AclSug, s => IsInt(s, out _))),
         C("interface", "Enter interface view", EnterIface)
             .T(new Lit("range", "Set interface range"),
-                new Val("kind1", "<interface-type>", IfKindSug, IfKindAccept, null, true), new Val("num1", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind1")),
+                new Val("kind1", "<interface-type>", IfRangeKindSug, IfRangeKindAccept, null, true), new Val("num1", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind1")),
                 new Lit("to", "End of interface range"),
-                new Val("kind2", "<interface-type>", IfKindSug, IfKindAccept, null, true), new Val("num2", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind2")))
+                new Val("kind2", "<interface-type>", IfRangeKindSug, IfRangeKindAccept, null, true), new Val("num2", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind2")))
             // 宽松模板：只为把"连写/漏写 to"等情况交给 EnterRange 按真机口径报错（合法写法由上面的拆分模板先命中）
             .T(new Lit("range", "Set interface range"),
                 new Val("bad0", "<interface>", null, _ => true, null, true),
@@ -565,13 +596,16 @@ public static class CommandSets
         C("port-group", "Enter port group view", EnterPortGroup)
             .T(new Val("pg", "STRING<1-32>", (d, p) => d.PortGroups.Keys.OrderBy(k => k).Select(k => new Candidate(k, "")))),
         C("vlan", "Create VLAN and enter VLAN view", VlanRun)
-            .T(new Lit("batch", "Create VLANs in batches"), new Rep(new Val("id", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _))))
+            .T(new Lit("batch", "Batch process"), new Rep(new Val("id", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _))))
             .T(new Val("id", "INTEGER<1-4094>", null, s => IsInt(s, out _))),
-        C("rsa", "RSA key pair", RsaRun).T(new Lit("local-key-pair"), new Lit("create")),
-        C("stelnet", "Enable SSH service", StelnetRun)
+        C("rsa", "RSA key pair", RsaRun)
+            .T(new Lit("local-key-pair"), new Lit("create"))
+            .T(new Lit("peer-public-key")),
+        C("stelnet", "Stelnet client/server", StelnetRun)
             .T(new Lit("server"), new Lit("enable"))
             .T(new Lit("ipv4"), new Lit("server"), new Lit("enable"))
-            .T(new Lit("ipv6"), new Lit("server"), new Lit("enable")),
+            .T(new Lit("ipv6"), new Lit("server"), new Lit("enable"))
+            .T(new Val("host", "STRING<1-255>")),
         C("ssh", "SSH related", _ => new[] { "  Info: The command is executed successfully." })
             .T(new Lit("client"), new Lit("first-time"), new Lit("enable"))
             .T(new Lit("user"), ValUser, new Lit("authentication-type"), new Val("t", "<auth-type>"))
@@ -584,7 +618,22 @@ public static class CommandSets
             .T(new Lit("community"), new Val("dir", "{read|write}", (d, p) => SugOf(new[] { "read", "write" }, p)),
                 new Opt(new Lit("simple", "Plain text")), new Val("pw", "STRING<1-32>"),
                 new Opt(new Lit("acl"), new Val("aclnum", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _))))
+            .T(new Lit("extend", "SNMP extend configuration"), new Rep(AnyVal, 4))
+            .T(new Lit("group", "Set an SNMP group based on USM"), new Rep(AnyVal, 4))
+            .T(new Lit("inform", "Configure parameters for notifications in inform"), new Rep(AnyVal, 3))
+            .T(new Lit("local-engineid", "Set the engine ID of local SNMP entity"), new Rep(AnyVal, 3))
+            .T(new Lit("manner", "SNMP message manner"), new Rep(AnyVal, 3))
+            .T(new Lit("mib-view", "Set SNMP MIB view information"), new Rep(AnyVal, 4))
+            .T(new Lit("notification-log", "Notification log"), new Rep(AnyVal, 4))
+            .T(new Lit("notify-filter-profile", "Define notification filter profile"), new Rep(AnyVal, 4))
+            .T(new Lit("packet", "Set SNMP packet's parameters"), new Rep(AnyVal, 3))
+            .T(new Lit("packet-priority", "The priority of the SNMP packet"), new Rep(AnyVal, 2))
+            .T(new Lit("set-cache", "Cache to store the result of the set operation"), new Rep(AnyVal, 3))
+            .T(new Lit("usm-user", "Set a new user for access to SNMP entity"), new Rep(AnyVal, 6))
+            .T(new Lit("sys-info"), new Lit("contact", "Set the contact information for system maintenance"), new Val("v", "STRING<1-255>"))
+            .T(new Lit("sys-info"), new Lit("location", "Set the physical position"), new Val("v", "STRING<1-255>"))
             .T(new Lit("sys-info"), new Lit("version"), new Rep(new Val("ver", "{v1|v2c|v3|all}", (d, p) => SugOf(new[] { "v1", "v2c", "v3", "all" }, p))))
+            .T(new Lit("target-host"), new Lit("inform"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 8))
             .T(new Lit("target-host"), new Lit("trap"), new Lit("address"), new Lit("udp-domain"), ValIp,
                 new Opt(new Lit("udp-port"), new Val("port", "INTEGER<1-65535>", null, s => IsInt(s, out _))),
                 new Lit("params"), new Lit("securityname"), new Opt(new Lit("cipher", "Cipher text")), new Val("sec", "STRING<1-32>"),
@@ -593,16 +642,39 @@ public static class CommandSets
                 new Opt(new Lit("udp-port"), new Val("port", "INTEGER<1-65535>", null, s => IsInt(s, out _))),
                 new Lit("params"), new Lit("securityname"), new Opt(new Lit("simple", "Plain text")), new Val("sec", "STRING<1-32>"),
                 new Opt(new Val("ver", "{v2c|v3}", (d, p) => SugOf(new[] { "v2c", "v3" }, p))))
-            .T(new Lit("trap"), new Lit("enable")),
+            .T(new Lit("trap"), new Lit("disable", "SNMP trap/notification disable commands group"))
+            .T(new Lit("trap"), new Lit("enable", "SNMP trap/notification enable commands group"))
+            .T(new Lit("trap"), new Lit("life"), new Val("n", "INTEGER<0-1000>", null, s => IsInt(s, out _)))
+            .T(new Lit("trap"), new Lit("queue-size"), new Val("n", "INTEGER<1-1000>", null, s => IsInt(s, out _)))
+            .T(new Lit("trap"), new Lit("source", "Set the source interface of trap packet"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 3))
+            .T(new Lit("trap"), new Lit("suppress"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("trap"), new Lit("type"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4)),
         C("info-center", "Log service", InfoCenterRun)
-            .T(new Lit("enable"))
-            .T(new Lit("loghost"), new Opt(new Lit("source"), ValIf), ValIp),
+            .T(new Lit("channel"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("console"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("enable", "Enable the information center"))
+            .T(new Lit("filter-id"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("local"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("logbuffer"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("loghost"), new Val("ip", "<X.X.X.X>") { HintHelp = "Logging host IP address" })
+            .T(new Lit("loghost"), new Lit("ipv6", "Logging host IPv6 address"), new Val("ip6", "X:X::X:X"))
+            .T(new Lit("loghost"), new Lit("source", "Set the source address of packets sent to loghost"), ValIf, ValIp)
+            .T(new Lit("monitor"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("rate-limit"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("snmp"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("source"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("statistic-suppress"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("timestamp"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4))
+            .T(new Lit("trapbuffer"), new Rep(new Val("a", "<text>", null, _ => true, null, true), 4)),
         C("clock", "Set clock/timezone", ClockRun)
             .T(new Lit("timezone"), new Val("tz", "STRING<1-32>"), new Lit("add", "Add to the UTC time"), new Val("off", "<HH:MM:SS>"))
             .T(new Lit("timezone"), new Val("tz", "STRING<1-32>"), new Lit("minus", "Subtract from the UTC time"), new Val("off", "<HH:MM:SS>"))
             .T(new Lit("datetime"), new Val("time", "<HH:MM:SS>"), new Val("date", "<YYYY-MM-DD>")),
         C("user-interface", "Enter user interface view", EnterUi)
-            .T(new Lit("console", "Console user interface"), new Val("n", "INTEGER<0>", null, s => IsInt(s, out _)))
+            .T(new Val("one", "INTEGER<0,34-48,50-54>", null, s => IsInt(s, out _)))
+            .T(new Lit("console", "Primary user terminal interface"), new Val("n", "INTEGER<0>", null, s => IsInt(s, out _)))
+            .T(new Lit("current", "The current user terminal interface"))
+            .T(new Lit("maximum-vty", "The maximum number of VTY users"), new Val("n", "INTEGER<1-1024>", null, s => IsInt(s, out _)))
             .T(new Lit("vty", "Virtual terminal user interface"), new Val("a", "INTEGER<0-20>", null, s => IsInt(s, out _)), new Opt(new Val("b", "INTEGER<0-20>", null, s => IsInt(s, out _)))),
         UndoSystemCmd,
         Nav("quit", "Exit current view", QuitRun),
@@ -610,9 +682,24 @@ public static class CommandSets
         DisplayCmd, SaveCmd, CheckCmd
     };
 
+    static string[] AaaRun(ExecCtx c)
+    {
+        // 带参数的 aaa 子命令（abnormal-offline-record 等）只做接受，不切视图
+        if (c.Tokens.Count > 1) return Array.Empty<string>();
+        c.S.View = "aaa";
+        return Array.Empty<string>();
+    }
+
+    static string[] AclRun(ExecCtx c)
+    {
+        // ipv6 / name 两种写法本模拟器不做模型，接受不报错
+        if (c.Tokens.Count > 1 && (Eq(c.Tokens[1], "ipv6") || Eq(c.Tokens[1], "name"))) return Array.Empty<string>();
+        return EnterAcl(c);
+    }
+
     static string[] EnterAcl(ExecCtx c)
     {
-        if (!IsInt(c.Cap("num"), out var n) || n < 2000 || n > 3999) return Err("Wrong parameter found at '^' position.");
+        if (!IsInt(c.Cap("num"), out var n) || n < 2000 || n > 5999) return Err("Wrong parameter found at '^' position.");
         if (!c.Dev.Acls.ContainsKey(n)) c.Dev.Acls[n] = new Acl { Number = n };
         c.S.AclNumber = n;
         c.S.View = "acl";
@@ -630,17 +717,25 @@ public static class CommandSets
         if (c.Has("if") && !Eq(c.Cap("if"), "NULL0"))
             return ErrAt(c, 1, "Wrong parameter found at '^' position.");
         var kind = CanonIfaceKind(c.Cap("kind"));
-        if (!c.Has("if") && Eq(kind, "NULL") && !Eq(c.Cap("num"), "0"))
+        var num = c.Cap("num");
+        if (!c.Has("if") && Eq(kind, "NULL") && !Eq(num, "0"))
             return ErrAt(c, 2, "Wrong parameter found at '^' position.");
         var name = c.Has("if")
             ? "NULL0"
-            : (Eq(kind, "NULL") ? "NULL0" : kind + c.Cap("num"));
+            : (Eq(kind, "NULL") ? "NULL0" : kind + num);
         if (!c.Dev.Ifaces.ContainsKey(name))
         {
-            if (name.StartsWith("Vlanif", StringComparison.OrdinalIgnoreCase) && IsInt(name.Substring(6), out var vlan))
+            if (Eq(kind, "Vlanif"))
             {
+                if (!IsInt(num, out var vlan)) return ErrAt(c, 2, "Wrong parameter found at '^' position.");
                 if (!c.Dev.Vlans.Contains(vlan)) return Err("The VLAN does not exist.");
                 c.Dev.Ifaces[name] = new Iface { Name = name, IsVlanif = true };
+            }
+            else if (Eq(kind, "Eth-Trunk") || Eq(kind, "LoopBack") || Eq(kind, "Tunnel"))
+            {
+                var max = Eq(kind, "Eth-Trunk") ? 127 : 1023;
+                if (!IsInt(num, out var n) || n < 0 || n > max) return ErrAt(c, 2, "Wrong parameter found at '^' position.");
+                c.Dev.Ifaces[name] = new Iface { Name = name };
             }
             else return Err("Wrong parameter found at '^' position.");
         }
@@ -657,10 +752,10 @@ public static class CommandSets
             if (IsConcatIfaceToken(t[i])) return ErrAt(c, i, "Wrong parameter found at '^' position.");
         // 合法写法只有：interface range <type> <num> to <type> <num>
         if (t.Count != 7) return ErrAt(c, Math.Min(t.Count, 2), "Wrong parameter found at '^' position.");
-        if (!IsIfaceKindToken(t[2])) return ErrAt(c, 2, "Wrong parameter found at '^' position.");
+        if (!IsRangeKindToken(t[2])) return ErrAt(c, 2, "Wrong parameter found at '^' position.");
         if (!IsIfNumToken(t[3])) return ErrAt(c, 3, "Wrong parameter found at '^' position.");
         if (!Eq(t[4], "to")) return ErrAt(c, 4, "Wrong parameter found at '^' position.");
-        if (!IsIfaceKindToken(t[5])) return ErrAt(c, 5, "Wrong parameter found at '^' position.");
+        if (!IsRangeKindToken(t[5])) return ErrAt(c, 5, "Wrong parameter found at '^' position.");
         if (!IsIfNumToken(t[6])) return ErrAt(c, 6, "Wrong parameter found at '^' position.");
         // 类型大小写不敏感、两端可混用；拼成规范名再查表（字典是大小写敏感的）
         string left = CanonIfaceKind(t[2]) + t[3];
@@ -710,8 +805,11 @@ public static class CommandSets
         return Array.Empty<string>();
     }
 
-    static string[] RsaRun(ExecCtx c) => new[]
+    static string[] RsaRun(ExecCtx c)
     {
+        if (c.Tokens.Count > 1 && Eq(c.Tokens[1], "peer-public-key")) return Array.Empty<string>();
+        return new[]
+        {
         "The key name will be: " + c.Dev.SysName + "_Host",
         "% RSA keys defined for " + c.Dev.SysName + "_Host already exist.",
         "Confirm to replace them? [y/n]:y",
@@ -724,7 +822,8 @@ public static class CommandSets
         "........................++",
         "....++++",
         "...........++"
-    };
+        };
+    }
 
     static bool Confirm(ExecCtx c, string warning)
     {
@@ -737,9 +836,10 @@ public static class CommandSets
     static string[] StelnetRun(ExecCtx c)
     {
         var t = c.Tokens.Select(x => x.ToLowerInvariant()).ToList();
-        if (t.Count > 1 && t[1] == "ipv6") c.Dev.StelnetV6 = true;
-        else c.Dev.StelnetV4 = true;
-        return new[] { "Info: Succeeded in starting the Stelnet server." };
+        if (t.Count > 1 && t[1] == "ipv6") { c.Dev.StelnetV6 = true; return new[] { "Info: Succeeded in starting the Stelnet server." }; }
+        if (t.Count > 1 && (t[1] == "server" || t[1] == "ipv4")) { c.Dev.StelnetV4 = true; return new[] { "Info: Succeeded in starting the Stelnet server." }; }
+        // stelnet <IP/hostname>：客户端连接（模拟器不回放真实握手）
+        return new[] { "Info: The command is executed successfully." };
     }
 
     static string[] SnmpRun(ExecCtx c)
@@ -747,6 +847,9 @@ public static class CommandSets
         var d = c.Dev;
         d.SnmpAgent = true;
         var t = c.Tokens;
+        if (t.Count >= 2 && new[] { "extend", "group", "inform", "local-engineid", "manner", "mib-view", "notification-log", "notify-filter-profile", "packet", "packet-priority", "set-cache", "usm-user" }
+                .Any(x => Eq(t[1], x)))
+            return Array.Empty<string>();
         if (t.Count >= 2 && Eq(t[1], "community"))
         {
             var com = new SnmpCommunity { Read = !Eq(c.Cap("dir"), "write"), Password = c.Cap("pw") };
@@ -756,12 +859,15 @@ public static class CommandSets
         }
         else if (t.Count >= 2 && Eq(t[1], "sys-info"))
         {
+            if (t.Count >= 3 && Eq(t[2], "contact")) { d.SnmpContact = string.Join(" ", t.Skip(3)); return Array.Empty<string>(); }
+            if (t.Count >= 3 && Eq(t[2], "location")) { d.SnmpLocation = string.Join(" ", t.Skip(3)); return Array.Empty<string>(); }
             d.SnmpVersion = string.Join(" ", t.Skip(3)).ToLowerInvariant();
             if (d.SnmpVersion.Contains("v1") || d.SnmpVersion.Contains("v2c"))
                 return new[] { "Warning: SNMPv1/SNMPv2c is not secure, and it is recommended to use SNMPv3." };
         }
         else if (t.Count >= 2 && Eq(t[1], "target-host"))
         {
+            if (t.Count >= 3 && Eq(t[2], "inform")) return Array.Empty<string>();   // inform 目标暂不进配置模型
             var tg = new SnmpTarget { Ip = c.Cap("ip"), Security = c.Cap("sec"), Version = c.Has("ver") ? c.Cap("ver") : "v2c" };
             if (c.Has("port") && IsInt(c.Cap("port"), out var p)) tg.Port = p;
             d.Targets.RemoveAll(x => x.Ip == tg.Ip);
@@ -769,6 +875,8 @@ public static class CommandSets
         }
         else if (t.Count >= 2 && Eq(t[1], "trap"))
         {
+            if (t.Count >= 3 && Eq(t[2], "disable")) { d.SnmpTrapEnable = false; return Array.Empty<string>(); }
+            if (t.Count >= 3 && !Eq(t[2], "enable")) return Array.Empty<string>();   // life/queue-size/source/suppress/type：接受不报错
             if (!d.SnmpTrapEnable && !Confirm(c, "All switches of SNMP trap/notification will be open. Continue? [Y/N]:"))
                 return new[] { "Info: The operation is canceled." };
             d.SnmpTrapEnable = true;
@@ -781,12 +889,14 @@ public static class CommandSets
         var t = c.Tokens;
         if (t.Count >= 2 && Eq(t[1], "loghost"))
         {
+            if (t.Count >= 3 && Eq(t[2], "ipv6")) return Array.Empty<string>();   // IPv6 日志主机：接受不报错
             var ip = c.Cap("ip");
             if (!IsIp(ip)) return Err("Wrong parameter found at '^' position.");
             if (!c.Dev.LogHosts.Contains(ip)) c.Dev.LogHosts.Add(ip);
             return new[] { "Warning: There is security risk as this operation enables a non secure syslog protocol." };
         }
-        else c.Dev.InfoCenterEnabled = true;
+        if (t.Count == 1 || (t.Count >= 2 && Eq(t[1], "enable"))) c.Dev.InfoCenterEnabled = true;
+        // 其余 info-center 子命令（channel/console/filter-id/local/logbuffer/monitor/rate-limit/snmp/source/...）：接受不报错
         return Array.Empty<string>();
     }
 
@@ -816,8 +926,11 @@ public static class CommandSets
     static string[] EnterUi(ExecCtx c)
     {
         var t = c.Tokens;
+        if (Eq(t[1], "maximum-vty")) return Array.Empty<string>();           // 最大 VTY 数：接受不报错
         string name;
-        if (Eq(t[1], "console")) name = "con " + c.Cap("n");
+        if (Eq(t[1], "current")) name = "con 0";                             // 当前会话就是 con 0
+        else if (Eq(t[1], "console")) name = "con " + c.Cap("n");
+        else if (c.Has("one")) name = "vty " + c.Cap("one");
         else name = c.Has("b") ? "vty " + c.Cap("a") + " " + c.Cap("b") : "vty " + c.Cap("a");
         if (name.StartsWith("vty") && name.Split(' ').Length == 2 && !c.Has("b"))
             name = "vty " + c.Cap("a") + " " + c.Cap("a");
@@ -914,14 +1027,17 @@ public static class CommandSets
     static readonly List<Command> AaaView = new()
     {
         C("local-user", "Configure local user", LocalUserRun)
-            .T(ValUser, new Lit("password", "Set the password"), new Val("mode", "{cipher|irreversible-cipher}", SugCipherMode,
-                    t => t.Equals("cipher", StringComparison.OrdinalIgnoreCase) || t.Equals("irreversible-cipher", StringComparison.OrdinalIgnoreCase)), new Val("pw", "STRING<8-64>"))
-            .T(ValUser, new Lit("password", "Set the password"), new Val("mode", "{cipher|irreversible-cipher}", SugCipherMode,
-                    t => t.Equals("cipher", StringComparison.OrdinalIgnoreCase) || t.Equals("irreversible-cipher", StringComparison.OrdinalIgnoreCase)), new Val("pw", "STRING<8-64>"),
+            .T(ValUser, new Lit("access-limit", "Set access limit of user(s)"), new Rep(AnyVal, 3))
+            .T(ValUser, new Lit("ftp-directory", "Set user(s) FTP directory permitted"), new Rep(AnyVal, 3))
+            .T(ValUser, new Lit("idle-timeout", "Set the idle timeout"), new Val("min", "INTEGER<0-35791>", null, s => IsInt(s, out _)), new Opt(new Val("sec", "INTEGER<0-59>", null, s => IsInt(s, out _))))
+            .T(ValUser, new Lit("password", "Set password"), new Val("mode", "{cipher|irreversible-cipher|simple}", SugCipherMode,
+                    t => new[] { "cipher", "irreversible-cipher", "simple" }.Any(x => x.Equals(t, StringComparison.OrdinalIgnoreCase))), new Val("pw", "STRING<8-64>"))
+            .T(ValUser, new Lit("password", "Set password"), new Val("mode", "{cipher|irreversible-cipher|simple}", SugCipherMode,
+                    t => new[] { "cipher", "irreversible-cipher", "simple" }.Any(x => x.Equals(t, StringComparison.OrdinalIgnoreCase))), new Val("pw", "STRING<8-64>"),
                 new Lit("privilege"), new Lit("level", "Set the privilege level"), new Val("n", "INTEGER<0-15>", null, s => IsInt(s, out _)))
             .T(ValUser, new Lit("privilege"), new Lit("level", "Set the privilege level"), new Val("n", "INTEGER<0-15>", null, s => IsInt(s, out _)))
-            .T(ValUser, new Lit("service-type", "Set the service type"), new Rep(new Val("svc", "{terminal|ssh|telnet|ftp|http}", SugServices)))
-            .T(ValUser, new Lit("idle-timeout", "Set the idle timeout"), new Val("min", "INTEGER<0-35791>", null, s => IsInt(s, out _)), new Opt(new Val("sec", "INTEGER<0-59>", null, s => IsInt(s, out _)))),
+            .T(ValUser, new Lit("service-type", "Set the service type"), new Rep(new Val("svc", "{8021x|bind|ftp|http|ppp|ssh|telnet|terminal|web|x25-pad}", SugServices)))
+            .T(ValUser, new Lit("state", "Activate/Block the user(s)"), new Rep(AnyVal, 3)),
         C("local-aaa-user", "AAA user policy", LocalAaaRun)
             .T(new Lit("wrong-password", "Wrong password policy"), new Lit("retry-interval", "Retry interval"), new Val("a", "INTEGER<1-60>", null, s => IsInt(s, out _)),
                 new Lit("retry-time", "Maximum retry times"), new Val("b", "INTEGER<1-10>", null, s => IsInt(s, out _)),
@@ -964,6 +1080,7 @@ public static class CommandSets
             if (c.Has("n") && IsInt(c.Cap("n"), out var lv0)) u.Privilege = lv0;
             return Array.Empty<string>();
         }
+        if (Eq(t[2], "access-limit") || Eq(t[2], "ftp-directory") || Eq(t[2], "state")) return Array.Empty<string>();
         if (!d.Users.TryGetValue(name, out var user)) return Err("The user does not exist.");
         if (Eq(t[2], "privilege"))
         {
@@ -1023,26 +1140,26 @@ public static class CommandSets
     {
         C("rule", "Configure ACL rule", RuleRun)
             .T(ValAclAction, new Lit("ip", "Any IP protocol"))
-            .T(ValAclAction, new Lit("source", "Specify the source address"), ValIp, ValWildcard)
-            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("eq", "Equal to the specified port"), ValPort)
-            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("gt", "Greater than the specified port"), ValPort)
-            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("lt", "Less than the specified port"), ValPort)
-            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("range", "In the specified port range"),
+            .T(ValAclAction, new Lit("source", "Specify source address"), ValIp, ValWildcard)
+            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify destination port"), new Lit("eq", "Equal to given port number"), ValPort)
+            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify destination port"), new Lit("gt", "Greater than given port number"), ValPort)
+            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify destination port"), new Lit("lt", "Less than given port number"), ValPort)
+            .T(ValAclAction, ValProto, new Lit("destination-port", "Specify destination port"), new Lit("range", "Between two port numbers"),
                 new Val("p1", "INTEGER<0-65535>", PortSug, s => IsInt(s, out _)), new Val("p2", "INTEGER<0-65535>", PortSug, s => IsInt(s, out _)))
             .T(ValAclAction)
             .T(ValAclId, ValAclAction)
             .T(ValAclId, ValAclAction, new Lit("ip", "Any IP protocol"))
-            .T(ValAclId, ValAclAction, new Lit("source", "Specify the source address"), ValIp, ValWildcard)
-            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("eq", "Equal to the specified port"), ValPort)
-            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("gt", "Greater than the specified port"), ValPort)
-            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("lt", "Less than the specified port"), ValPort)
-            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify the destination port"), new Lit("range", "In the specified port range"),
+            .T(ValAclId, ValAclAction, new Lit("source", "Specify source address"), ValIp, ValWildcard)
+            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify destination port"), new Lit("eq", "Equal to given port number"), ValPort)
+            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify destination port"), new Lit("gt", "Greater than given port number"), ValPort)
+            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify destination port"), new Lit("lt", "Less than given port number"), ValPort)
+            .T(ValAclId, ValAclAction, ValProto, new Lit("destination-port", "Specify destination port"), new Lit("range", "Between two port numbers"),
                 new Val("p1", "INTEGER<0-65535>", PortSug, s => IsInt(s, out _)), new Val("p2", "INTEGER<0-65535>", PortSug, s => IsInt(s, out _))),
         C("description", "ACL description", c =>
         {
             if (c.Dev.Acls.TryGetValue(c.S.AclNumber, out var a)) a.Description = string.Join(" ", c.Tokens.Skip(1));
             return Array.Empty<string>();
-        }).T(new Rep(new Val("w", "<text>"))),
+        }).T(new Rep(new Val("w", "TEXT") { HintHelp = "ACL description (no more than 127 characters)" })),
         UndoAclCmd,
         Nav("quit", "Exit current view", QuitRun),
         Nav("return", "Return to user view", ReturnRun),
@@ -1064,25 +1181,26 @@ public static class CommandSets
         var t = c.Tokens.Select(x => x.ToLowerInvariant()).ToList();
         if (c.S.AclNumber < 3000 && (t.Contains("ip") || t.Contains("tcp") || t.Contains("udp") || t.Contains("destination-port")))
             return Err("Wrong parameter found at '^' position.");
-        int id;
+        if (t.Contains("description")) return Array.Empty<string>();   // rule <id> description <text>：接受不落配置
+        long id;
         int actionIdx;
         if (c.Has("id"))
         {
-            if (!IsInt(c.Cap("id"), out id) || id < 1 || id > 65535) return Err("Wrong parameter found at '^' position.");
+            if (!long.TryParse(c.Cap("id"), out id) || id < 0 || id > 4294967294) return Err("Wrong parameter found at '^' position.");
             actionIdx = 2;
         }
         else
         {
-            var maxId = acl.Rules.Count == 0 ? 0 : acl.Rules.Max(x => x.Id);
+            var maxId = acl.Rules.Count == 0 ? 0L : acl.Rules.Max(x => x.Id);
             id = maxId + 5;
-            if (id > 65535) return Err("The rule ID reaches the upper limit.");
+            if (id > 4294967294) return Err("The rule ID reaches the upper limit.");
             actionIdx = 1;
         }
         var action = c.Cap("action").ToLowerInvariant();
         if (action != "permit" && action != "deny") return Err("Wrong parameter found at '^' position.");
         var r = new AclRule
         {
-            Id = id,
+            Id = (int)id,
             Action = action,
             Raw = "rule " + id + " " + action + (c.Tokens.Count > actionIdx + 1 ? " " + string.Join(" ", c.Tokens.Skip(actionIdx + 1)) : "")
         };
@@ -1125,13 +1243,17 @@ public static class CommandSets
             var si = t.IndexOf("source");
             if (si >= 2)
             {
-                r.Source = c.Cap("ip");
-                if (IsInt(c.Cap("wc"), out var wc)) r.SourceWildcard = wc;
-                r.Proto = "ip";
+                if (si + 1 < t.Count && Eq(t[si + 1], "any")) { r.Proto = "ip"; }
+                else
+                {
+                    r.Source = c.Cap("ip");
+                    if (IsInt(c.Cap("wc"), out var wc)) r.SourceWildcard = wc;
+                    r.Proto = "ip";
+                }
             }
             else r.Proto = "ip";
         }
-        acl.Rules.RemoveAll(x => x.Id == id);
+        acl.Rules.RemoveAll(x => x.Id == (int)id);
         acl.Rules.Add(r);
         return Array.Empty<string>();
     }
@@ -1141,7 +1263,7 @@ public static class CommandSets
         var d = c.Dev;
         var t = c.Tokens.Select(x => x.ToLowerInvariant()).ToList();
         if (!d.Acls.TryGetValue(c.S.AclNumber, out var acl)) return Err("ACL not found.");
-        if (Eq(t[1], "rule") && IsInt(c.Cap("id"), out var id)) { acl.Rules.RemoveAll(x => x.Id == id); return Array.Empty<string>(); }
+        if (Eq(t[1], "rule") && long.TryParse(c.Cap("id"), out var id)) { acl.Rules.RemoveAll(x => x.Id == (int)Math.Min(id, int.MaxValue)); return Array.Empty<string>(); }
         if (Eq(t[1], "description")) { acl.Description = null; return Array.Empty<string>(); }
         return Err("Unrecognized command found at '^' position.");
     }
@@ -1156,9 +1278,18 @@ public static class CommandSets
             var text = string.Join(" ", c.Tokens.Skip(1));
             foreach (var i in Targets(c)) i.Description = text;
             return Array.Empty<string>();
-        }).T(new Rep(new Val("w", "<text>"))),
+        }).T(new Rep(new Val("w", "TEXT") { HintHelp = "Interface description (no more than 242 characters)" })),
         C("port", "Port configuration", PortRun)
-            .T(new Lit("link-type", "Set the link type"), new Val("lt", "{access|trunk|hybrid}", (d, p) => SugOf(new[] { "access", "trunk", "hybrid" }, p)))
+            .T(new Lit("link-type", "Set the link type"), new Val("lt", "{access|dot1q-tunnel|hybrid|trunk}", (d, p) => SugOf(new[] { "access", "dot1q-tunnel", "hybrid", "trunk" }, p)))
+            .T(new Lit("add-tag", "Add outer tag based on acl"), new Rep(AnyVal, 4))
+            .T(new Lit("discard", "Discard"), new Rep(AnyVal, 2))
+            .T(new Lit("hybrid", "Hybrid port"), new Rep(AnyVal, 4))
+            .T(new Lit("link-flap", "Link flap"), new Rep(AnyVal, 2))
+            .T(new Lit("mux-vlan", "Multiplex vlan"), new Rep(AnyVal, 2))
+            .T(new Lit("priority", "Specify current port's priority"), new Rep(AnyVal, 2))
+            .T(new Lit("type", "Type"), new Rep(AnyVal, 3))
+            .T(new Lit("vlan-mapping", "VLAN Mapping"), new Rep(AnyVal, 4))
+            .T(new Lit("vlan-stacking", "VLAN Stacking"), new Rep(AnyVal, 4))
             .T(new Lit("default", "Set the default VLAN"), new Lit("vlan"), new Val("vid", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _)))
             .T(new Lit("trunk", "Trunk configuration"), new Lit("allow-pass", "Allow the VLAN to pass"), new Lit("vlan"),
                 new Rep(new Val("vid", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _)))),
@@ -1166,7 +1297,9 @@ public static class CommandSets
             .T(new Val("dir", "{inbound|outbound}", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)), new Lit("acl", "Specify an ACL"),
                 new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _))),
         C("shutdown", "Shut down interface", c => { foreach (var i in Targets(c)) i.Shutdown = true; return Array.Empty<string>(); }).T(),
-        C("ip", "IP configuration", IpRun).T(new Lit("address"), ValIp, new Val("mask", "<X.X.X.X>")),
+        C("ip", "IP configuration", IpRun)
+            .T(new Lit("address"), ValIp, new Val("mask", "<X.X.X.X>"))
+            .T(new Lit("source", "Source"), new Rep(AnyVal, 3)),
         UndoIfaceCmd,
         Nav("quit", "Exit current view", QuitRun),
         Nav("return", "Return to user view", ReturnRun),
@@ -1193,6 +1326,9 @@ public static class CommandSets
     static string[] PortRun(ExecCtx c)
     {
         var t = c.Tokens.Select(x => x.ToLowerInvariant()).ToList();
+        if (t.Count >= 2 && new[] { "add-tag", "discard", "hybrid", "link-flap", "mux-vlan", "priority", "type", "vlan-mapping", "vlan-stacking" }
+                .Any(x => Eq(t[1], x)))
+            return Array.Empty<string>();
         if (t.Count > 2 && Eq(t[1], "link-type"))
         {
             foreach (var i in Targets(c)) i.LinkType = t[2];
@@ -1229,6 +1365,7 @@ public static class CommandSets
 
     static string[] IpRun(ExecCtx c)
     {
+        if (c.Tokens.Count > 1 && Eq(c.Tokens[1], "source")) return Array.Empty<string>();
         if (c.S.View == "range" || c.S.View == "pg") return Err("Unsupported operation on an interface range.");
         var i = SetIface(c);
         if (!i.IsVlanif) return Err("Unsupported operation on a physical port.");
@@ -1362,7 +1499,7 @@ public static class CommandSets
     static readonly List<Command> VlanView = new()
     {
         C("description", "VLAN description", c => { GetVlanCfg(c).Description = JoinText(c); return Array.Empty<string>(); })
-            .T(new Rep(new Val("w", "<text>"))),
+            .T(new Rep(new Val("w", "TEXT") { HintHelp = "VLAN description(no more than 80 characters)" })),
         C("name", "VLAN name", c => { GetVlanCfg(c).Name = string.Join(" ", c.Tokens.Skip(1)); return Array.Empty<string>(); })
             .T(new Val("nm", "STRING<1-32>")),
         UndoVlanViewCmd,
@@ -1479,9 +1616,11 @@ public static class CommandSets
         }).T(new Val("m", "{aaa|password|none}", (d, p) => SugOf(new[] { "aaa", "password", "none" }, p))),
         C("acl", "Apply ACL to VTY", c =>
         {
+            if (c.Tokens.Count > 1 && Eq(c.Tokens[1], "ipv6")) return Array.Empty<string>();
             if (c.Dev.Uis.TryGetValue(c.S.UiName, out var u) && IsInt(c.Cap("num"), out var n)) u.Acl = n;
             return Array.Empty<string>();
-        }).T(new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)), new Opt(new Lit("inbound", "Inbound direction"))),
+        }).T(new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)), new Opt(new Lit("inbound", "Inbound direction")))
+          .T(new Lit("ipv6", "Filter IPv6 addresses"), new Opt(new Val("v6", "INTEGER<2000-3999>", null, s => IsInt(s, out _)))),
         C("idle-timeout", "Set idle timeout", c =>
         {
             if (!c.Dev.Uis.TryGetValue(c.S.UiName, out var u)) return Array.Empty<string>();
@@ -1522,5 +1661,432 @@ public static class CommandSets
         if (k.StartsWith("protocol inbound")) { u.Protocol = null; return Array.Empty<string>(); }
         if (k == "idle-timeout") { u.IdleSet = false; return Array.Empty<string>(); }
         return Err("Unrecognized command found at '^' position.");
+    }
+
+    // v1.5.0 第二批：按 gap 报告补 ACL rule 的协议族/tcp-udp 子关键字（有语义的照旧进规则，其余接受不报错）
+    static void AddAclRuleExtras()
+    {
+        var c = AclView.First(x => x.Kw == "rule");
+        void AddProto(string kw, Tok[] rest)
+        {
+            var pre = new Tok[] { ValAclAction, ValProto, new Lit(kw) };
+            c.T(pre.Concat(rest).ToArray());
+            c.T(new Tok[] { ValAclId }.Concat(pre.Skip(0)).Concat(rest).ToArray());
+        }
+        // rule <id> description <text>（真机可敲，配置里记录 rule 描述；本模拟器只接受）
+        c.T(ValAclId, new Lit("description"), new Rep(AnyVal, 4));
+        // 基础/高级通用：fragment / logging / time-range（无 id / 带 id）
+        foreach (var pre in new[] { new Tok[] { ValAclAction }, new Tok[] { ValAclId, ValAclAction } })
+        {
+            c.T(pre.Concat(new Tok[] { new Lit("fragment") }).ToArray());
+            c.T(pre.Concat(new Tok[] { new Lit("logging") }).ToArray());
+            c.T(pre.Concat(new Tok[] { new Lit("time-range"), new Val("tr", "STRING<1-32>") }).ToArray());
+        }
+        // 基础 ACL source any
+        c.T(ValAclAction, new Lit("source"), new Lit("any"));
+        c.T(ValAclId, ValAclAction, new Lit("source"), new Lit("any"));
+        // 高级 ACL：tcp/udp 子关键字
+        AddProto("destination", new Tok[] { ValIp, ValWildcard });
+        AddProto("source", new Tok[] { ValIp, ValWildcard });
+        AddProto("source-port", new Tok[] { new Lit("eq"), ValPort });
+        AddProto("source-port", new Tok[] { new Lit("gt"), ValPort });
+        AddProto("source-port", new Tok[] { new Lit("lt"), ValPort });
+        AddProto("dscp", new Tok[] { VInt("d", "INTEGER<0-63>") });
+        AddProto("precedence", new Tok[] { VInt("p", "INTEGER<0-7>") });
+        AddProto("tcp-flag", new Tok[] { new Val("f", "{ack|fin|psh|rst|syn|urg}", (d, p) => SugOf(new[] { "ack", "fin", "psh", "rst", "syn", "urg" }, p)), new Opt(new Val("f2", "{ack|fin|psh|rst|syn|urg}", (d, p) => SugOf(new[] { "ack", "fin", "psh", "rst", "syn", "urg" }, p))) });
+        AddProto("time-range", new Tok[] { new Val("tr", "STRING<1-32>") });
+        AddProto("tos", new Tok[] { VInt("t", "INTEGER<0-255>") });
+        AddProto("fragment", Array.Empty<Tok>());
+        AddProto("logging", Array.Empty<Tok>());
+        AddProto("destination-port", new Tok[] { new Lit("eq"), ValPort });
+        AddProto("destination-port", new Tok[] { new Lit("gt"), ValPort });
+        AddProto("destination-port", new Tok[] { new Lit("lt"), ValPort });
+    }
+
+    // ---------------- 帮助文案（v1.5.0：真机两列 `?`/Tab 第二列说明；词条取自 eNSP LSW transcripts） ----------------
+    static CommandSets()
+    {
+        AddAclRuleExtras();
+        FillHelp(UserView, UserHelp);
+        FillHelp(SystemView, SystemHelp);
+        FillHelp(AaaView, AaaHelp);
+        FillHelp(AclView, AclHelp);
+        FillHelp(IfaceView, IfaceHelp);
+        FillHelp(UiView, UiHelp);
+        FillHelp(VlanView, VlanHelp);
+        FillHelp(LuppView, LuppHelp);
+        Cli.CandHelp = w => CandHelpMap.TryGetValue(w, out var h) ? h : null;
+    }
+
+    static readonly Dictionary<string, string> HintHelpMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["INTEGER<1-4094>"] = "VLAN ID",
+        ["INTEGER<0-4294967294>"] = "ID of ACL rule",
+        ["{cipher|irreversible-cipher|simple}"] = "Password type",
+        ["{8021x|bind|ftp|http|ppp|ssh|telnet|terminal|web|x25-pad}"] = "Service type",
+        ["{access|dot1q-tunnel|hybrid|trunk}"] = "Port link type",
+        ["{inbound|outbound}"] = "Direction",
+        ["{v2c|v3}"] = "SNMP version",
+        ["{ack|fin|psh|rst|syn|urg}"] = "TCP flag",
+        ["INTEGER<0-63>"] = "DSCP value",
+        ["INTEGER<0-7>"] = "Precedence",
+        ["INTEGER<0-255>"] = "TOS value",
+        ["INTEGER<2000-2999>"] = "Basic access-list(add to current using rules)",
+        ["INTEGER<3000-3999>"] = "Advanced access-list(add to current using rules)",
+        ["INTEGER<4000-4999>"] = "Specify a L2 acl group",
+        ["INTEGER<5000-5999>"] = "User defined access-list",
+        ["INTEGER<2000-3999>"] = "Basic or advanced ACL",
+        ["INTEGER<1-65535>"] = "ID of ACL rule",
+        ["INTEGER<0-65535>"] = "Port number",
+        ["INTEGER<0,34-48,50-54>"] = "The first user terminal interface to be configured",
+        ["INTEGER<1-1024>"] = "The maximum number of VTY users, the default value is 5",
+        ["INTEGER<0-20>"] = "The first user terminal interface to be configured",
+        ["INTEGER<0>"] = "Console user terminal interface number",
+        ["INTEGER<0-35791>"] = "Set the number of minutes before a terminal user times out",
+        ["INTEGER<1-246>"] = "The system name",
+        ["STRING<1-255>"] = "IP address or host name of a remote system",
+        ["STRING<1-64>"] = "User name, in form of 'user@domain'",
+        ["STRING<1-63>"] = "Local user name",
+        ["STRING<1-32>"] = "Character string, 1-32 characters",
+        ["STRING<8-64>"] = "Password, 8-64 characters",
+        ["STRING<1-256>"] = "Character string",
+        ["<X.X.X.X>"] = "IP address",
+        ["<interface>"] = "Interface name",
+        ["<interface-type>"] = "Interface type",
+        ["<interface-number>"] = "Interface number",
+        ["<wildcard>"] = "Wildcard mask",
+        ["<text>"] = "Character string",
+        ["<auth-type>"] = "Authentication type",
+        ["<service-type>"] = "Service type",
+        ["<vlan-list>"] = "VLAN list",
+        ["{permit|deny}"] = "Action",
+        ["{tcp|udp}"] = "Protocol",
+        ["{read|write}"] = "Access mode",
+        ["{v1|v2c|v3|all}"] = "SNMP version",
+        ["{all|ssh|telnet}"] = "Protocol to be allowed",
+        ["{access|trunk|hybrid}"] = "Port link type",
+        ["{aaa|password|none}"] = "Authentication mode",
+        ["{cipher|simple}"] = "Password type",
+        ["{add|minus}"] = "Direction",
+        ["include|begin|exclude"] = "Filter mode",
+    };
+
+    static readonly Dictionary<string, string> CandHelpMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["read"] = "Read-only access for this community in the view",
+        ["dot1q-tunnel"] = "QinQ port",
+        ["gre"] = "GRE tunneling(47)",
+        ["icmp"] = "Internet Control Message Protocol(1)",
+        ["igmp"] = "Internet Group Management Protocol(2)",
+        ["ipinip"] = "IP in IP tunneling(4)",
+        ["ospf"] = "OSPF routing protocol(89)",
+        ["write"] = "Read-write access for this community in the view",
+        ["access"] = "Access port",
+        ["trunk"] = "Trunk port",
+        ["hybrid"] = "Hybrid port",
+        ["aaa"] = "AAA authentication",
+        ["none"] = "Login without checking",
+        ["password"] = "Authentication through the password of a user terminal interface",
+        ["all"] = "All protocols",
+        ["ssh"] = "SSH protocol",
+        ["telnet"] = "Telnet protocol",
+        ["v1"] = "SNMPv1",
+        ["v2c"] = "SNMPv2c",
+        ["v3"] = "SNMPv3",
+        ["cipher"] = "User password with cipher text",
+        ["simple"] = "User password with plain text",
+        ["irreversible-cipher"] = "User password with irreversible cipher text",
+        ["terminal"] = "Terminal user",
+        ["8021x"] = "802.1x user",
+        ["bind"] = "Bind authentication user",
+        ["ppp"] = "PPP user",
+        ["web"] = "Web authentication user",
+        ["x25-pad"] = "X25-pad user",
+        ["ftp"] = "FTP user",
+        ["http"] = "Http user",
+        ["permit"] = "Specify matched packet permit",
+        ["deny"] = "Specify matched packet deny",
+        ["tcp"] = "Transmission Control Protocol(6)",
+        ["udp"] = "User Datagram Protocol(17)",
+        ["ip"] = "Any IP protocol",
+        ["eq"] = "Equal to given port number",
+        ["gt"] = "Greater than given port number",
+        ["lt"] = "Less than given port number",
+        ["range"] = "Between two port numbers",
+        ["inbound"] = "Apply the acl on inbound packets",
+        ["outbound"] = "Apply the acl on outbound packets",
+        ["add"] = "Add to the UTC time",
+        ["minus"] = "Subtract from the UTC time",
+        ["level"] = "Set admin user(s) level",
+        ["first-time"] = "Enable the first-time authentication",
+        ["enable"] = "Enable",
+        ["disable"] = "Disable",
+    };
+
+    static readonly Dictionary<string, string> UserHelp = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["system-view"] = "Enter system view",
+        ["quit"] = "Exit current view",
+        ["return"] = "Return to user view",
+        ["save"] = "Save configuration",
+        ["check"] = "Run the hardening self-check",
+        ["reset"] = "Reset to factory defaults",
+        ["current-configuration"] = "Current configuration",
+        ["version"] = "Version information",
+        ["clock"] = "Current date and time",
+        ["this"] = "Current view configuration",
+        ["interface"] = "Interface information",
+        ["brief"] = "Summary information about the interface status",
+        ["acl"] = "Acl status and configuration information",
+        ["saved-configuration"] = "Saved configuration",
+        ["users"] = "Display information of all user terminals",
+        ["logbuffer"] = "Log buffer information",
+        ["cpu-usage"] = "CPU usage information",
+        ["memory-usage"] = "Memory usage information",
+        ["power"] = "Power information",
+        ["ip"] = "IP information",
+        ["vlan"] = "VLAN information",
+        ["|"] = "Matching output",
+        ["include"] = "Matching output",
+        ["begin"] = "Matching output",
+        ["exclude"] = "Matching output",
+    };
+
+    static readonly Dictionary<string, string> SystemHelp = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["sysname"] = "Set the system name",
+        ["aaa"] = "Enter AAA view",
+        ["abnormal-offline-record"] = "Abnormal-offline-record",
+        ["offline-record"] = "Offline-record",
+        ["online-fail-record"] = "Online-fail-record",
+        ["acl"] = "Enter ACL view",
+        ["number"] = "Specify a numbered ACL",
+        ["ipv6"] = "ACL IPv6",
+        ["name"] = "Specify a named ACL",
+        ["interface"] = "Enter interface view",
+        ["range"] = "Set interface range",
+        ["to"] = "End of interface range",
+        ["port-group"] = "Enter port group view",
+        ["vlan"] = "Create VLAN and enter VLAN view",
+        ["batch"] = "Batch process",
+        ["rsa"] = "RSA key pair",
+        ["local-key-pair"] = "Local RSA public key pair operations",
+        ["peer-public-key"] = "Remote peer RSA public key configuration",
+        ["stelnet"] = "Stelnet client/server",
+        ["server"] = "Set Stelnet server",
+        ["ipv4"] = "IPv4 protocol",
+        ["ssh"] = "SSH related",
+        ["client"] = "SSH client",
+        ["user"] = "SSH user",
+        ["authentication-type"] = "Set authentication type",
+        ["service-type"] = "Set service type",
+        ["snmp-agent"] = "SNMP agent",
+        ["community"] = "Set a community for the access of SNMPv1&SNMPv2c",
+        ["extend"] = "SNMP extend configuration",
+        ["group"] = "Set an SNMP group based on USM",
+        ["inform"] = "Configure parameters for notifications in inform",
+        ["local-engineid"] = "Set the engine ID of local SNMP entity",
+        ["manner"] = "SNMP message manner",
+        ["mib-view"] = "Set SNMP MIB view information",
+        ["notification-log"] = "Notification log",
+        ["notify-filter-profile"] = "Define notification filter profile",
+        ["packet"] = "Set SNMP packet's parameters",
+        ["packet-priority"] = "The priority of the SNMP packet",
+        ["set-cache"] = "Cache to store the result of the set operation",
+        ["usm-user"] = "Set a new user for access to SNMP entity",
+        ["sys-info"] = "Set system information of the node",
+        ["contact"] = "Set the contact information for system maintenance",
+        ["location"] = "Set the physical position information of this node",
+        ["version"] = "Enable the SNMP protocol version",
+        ["target-host"] = "Set the target hosts to receive SNMP notification/trap",
+        ["inform"] = "Specify the target to be inform host",
+        ["trap"] = "Set the parameters of SNMP trap/notification",
+        ["address"] = "Set the address",
+        ["udp-domain"] = "Set the UDP domain",
+        ["udp-port"] = "Set the UDP port",
+        ["params"] = "Set the parameters",
+        ["securityname"] = "Set the security name",
+        ["disable"] = "SNMP trap/notification disable commands group",
+        ["enable"] = "SNMP trap/notification enable commands group",
+        ["life"] = "Set the trap aging time",
+        ["queue-size"] = "Length of each TRAP message queue",
+        ["source"] = "Set the source address of packets sent to loghost",
+        ["suppress"] = "SNMP trap/notification suppress commands group",
+        ["type"] = "Set trap type",
+        ["info-center"] = "Information center",
+        ["channel"] = "Set the name of information channel",
+        ["console"] = "Setting of console configuration",
+        ["filter-id"] = "Specify the configuration of the ID filtering table",
+        ["local"] = "Setting of logging configurations except loghost",
+        ["logbuffer"] = "Setting of log buffer configuration",
+        ["loghost"] = "Setting of logging host configuration",
+        ["monitor"] = "Setting of monitor configuration",
+        ["rate-limit"] = "Specify the rate at which the information center",
+        ["snmp"] = "Setting of snmp configuration",
+        ["statistic-suppress"] = "Suppression that the first occurrence of an event is",
+        ["timestamp"] = "Set the time stamp type of information",
+        ["trapbuffer"] = "Setting of trap buffer configuration",
+        ["timezone"] = "Set the time zone",
+        ["datetime"] = "Set the date and time",
+        ["add"] = "Add to the UTC time",
+        ["minus"] = "Subtract from the UTC time",
+        ["user-interface"] = "Enter user interface view",
+        ["current"] = "The current user terminal interface",
+        ["maximum-vty"] = "The maximum number of VTY users, the default value is 5",
+        ["vty"] = "The virtual user terminal interface",
+        ["undo"] = "Negate a command or set its defaults",
+        ["telnet"] = "Telnet",
+        ["http"] = "HTTP",
+        ["clock"] = "Clock",
+    };
+
+    static readonly Dictionary<string, string> AaaHelp = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["local-user"] = "Configure local user",
+        ["password"] = "Set password",
+        ["privilege"] = "Set admin user(s) level",
+        ["level"] = "Set admin user(s) level",
+        ["service-type"] = "Service types for authorized user(s)",
+        ["idle-timeout"] = "Set the timeout period for terminal user(s)",
+        ["access-limit"] = "Set access limit of user(s)",
+        ["ftp-directory"] = "Set user(s) FTP directory permitted",
+        ["state"] = "Activate/Block the user(s)",
+        ["cipher"] = "User password with cipher text",
+        ["simple"] = "User password with plain text",
+        ["irreversible-cipher"] = "User password with irreversible cipher text",
+        ["terminal"] = "Terminal user",
+        ["ssh"] = "SSH user",
+        ["telnet"] = "Telnet user",
+        ["ftp"] = "FTP user",
+        ["http"] = "Http user",
+        ["local-aaa-user"] = "Set the local administrator password policy",
+        ["wrong-password"] = "Set the wrong password policy",
+        ["policy"] = "Set password policy",
+        ["administrator"] = "Administrator password policy",
+        ["user-password"] = "Set user password",
+        ["complexity-check"] = "Set password complexity check",
+        ["undo"] = "Negate a command or set its defaults",
+    };
+
+    static readonly Dictionary<string, string> AclHelp = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["rule"] = "Specify an ACL rule",
+        ["permit"] = "Specify matched packet permit",
+        ["deny"] = "Specify matched packet deny",
+        ["description"] = "Specify rule description",
+        ["ip"] = "Any IP protocol",
+        ["tcp"] = "Transmission Control Protocol(6)",
+        ["udp"] = "User Datagram Protocol(17)",
+        ["source"] = "Specify source address",
+        ["destination"] = "Specify destination address",
+        ["destination-port"] = "Specify destination port",
+        ["destination"] = "Specify destination address",
+        ["dscp"] = "Specify dscp",
+        ["fragment"] = "Check fragment packet",
+        ["logging"] = "Log matched packet",
+        ["precedence"] = "Specify precedence",
+        ["source-port"] = "Specify source port",
+        ["tcp-flag"] = "Specify tcp flag",
+        ["time-range"] = "Specify a special time",
+        ["tos"] = "Specify TOS",
+        ["any"] = "Any source",
+        ["source-port"] = "Specify source port",
+        ["eq"] = "Equal to given port number",
+        ["gt"] = "Greater than given port number",
+        ["lt"] = "Less than given port number",
+        ["range"] = "Between two port numbers",
+        ["undo"] = "Negate a command or set its defaults",
+    };
+
+    static readonly Dictionary<string, string> IfaceHelp = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["port"] = "Set port configuration",
+        ["link-type"] = "Switch port link type",
+        ["default"] = "Set the default VLAN",
+        ["trunk"] = "Set the trunk configuration",
+        ["allow-pass"] = "Allow the VLAN to pass",
+        ["vlan"] = "Set VLAN",
+        ["add-tag"] = "Add outer tag based on acl",
+        ["discard"] = "Discard",
+        ["type"] = "Type",
+        ["hybrid"] = "Hybrid port",
+        ["priority"] = "Specify current port's priority",
+        ["link-flap"] = "Link flap",
+        ["mux-vlan"] = "Multiplex vlan",
+        ["vlan-mapping"] = "VLAN Mapping",
+        ["vlan-stacking"] = "VLAN Stacking",
+        ["access"] = "Access port",
+        ["traffic-filter"] = "Set ACL-based traffic filtering",
+        ["inbound"] = "Apply the acl on inbound packets",
+        ["outbound"] = "Apply the acl on outbound packets",
+        ["acl"] = "Set the ACL",
+        ["shutdown"] = "Shut down the interface",
+        ["description"] = "Interface description",
+        ["ip"] = "IP configuration",
+        ["address"] = "Set the IP address",
+        ["undo"] = "Negate a command or set its defaults",
+    };
+
+    static readonly Dictionary<string, string> UiHelp = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["authentication-mode"] = "Configure the authentication mode for a user terminal",
+        ["aaa"] = "AAA authentication",
+        ["none"] = "Login without checking",
+        ["password"] = "Authentication through the password of a user terminal interface",
+        ["acl"] = "ACL-based connection",
+        ["ipv6"] = "Filter IPv6 addresses",
+        ["protocol"] = "Set the user interface protocol",
+        ["inbound"] = "Set the user interface protocol",
+        ["all"] = "All protocols",
+        ["ssh"] = "SSH protocol",
+        ["telnet"] = "Telnet protocol",
+        ["idle-timeout"] = "Set the timeout period for a terminal user",
+        ["undo"] = "Negate a command or set its defaults",
+    };
+
+    static readonly Dictionary<string, string> VlanHelp = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["description"] = "VLAN description",
+        ["name"] = "Set the VLAN name",
+        ["undo"] = "Negate a command or set its defaults",
+    };
+
+    static readonly Dictionary<string, string> LuppHelp = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["password"] = "Set the password policy",
+        ["expire"] = "Set the expiration period of passwords",
+        ["history"] = "Password history policy",
+        ["record"] = "Record the password history",
+        ["number"] = "Number of passwords recorded",
+        ["undo"] = "Negate a command or set its defaults",
+    };
+
+    static void FillHelp(List<Command> cmds, Dictionary<string, string> map)
+    {
+        foreach (var c in cmds)
+            foreach (var tpl in c.Templates)
+                FillToks(tpl, map);
+    }
+
+    static void FillToks(IEnumerable<Tok> toks, Dictionary<string, string> map)
+    {
+        foreach (var t in toks)
+        {
+            switch (t)
+            {
+                case Lit l:
+                    if (l.Help.Length == 0 && map.TryGetValue(l.W, out var h)) l.Help = h;
+                    break;
+                case Val v:
+                    if (v.HintHelp.Length == 0 && HintHelpMap.TryGetValue(v.Hint, out var hh)) v.HintHelp = hh;
+                    break;
+                case Opt o:
+                    FillToks(o.Inner, map);
+                    break;
+                case Rep r:
+                    FillToks(new[] { r.Inner }, map);
+                    break;
+            }
+        }
     }
 }
