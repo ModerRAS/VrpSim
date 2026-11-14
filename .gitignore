@@ -20,3 +20,7 @@ vrp-sim-state.json
 # Never commit build artifacts / binaries (release asset goes to GitHub Releases instead)
 *.exe
 *.pdb
+
+# Internal handoff / changelog docs (kept locally only; never published)
+HANDOFF-交接.md
+CHANGELOG-vrp-sim.md
