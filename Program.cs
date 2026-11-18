@@ -7,8 +7,10 @@ public static class Program
     public static int Main(string[] args)
     {
         try { Console.OutputEncoding = Encoding.UTF8; } catch { }
+        try { var w = Console.BufferWidth; if (w > 0) Platform.Width = w; } catch { }
         var processStartIso = RunTimer.LocalIsoNow();
         var s = new Session();
+        Platform.ResetState = () => StateStore.Delete(StateStore.DefaultPath);
         var batch = Console.IsInputRedirected || args.Contains("--batch") || args.Contains("--selftest");
         var selftest = args.Contains("--selftest");
         s.Interactive = !batch;

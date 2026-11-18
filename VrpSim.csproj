@@ -9,4 +9,12 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <ServerGarbageCollection>false</ServerGarbageCollection>
   </PropertyGroup>
+
+  <!-- web/ 是 Blazor WASM 网页版（独立项目），不要被控制台项目的默认通配编译进来 -->
+  <ItemGroup>
+    <Compile Remove="web/**" />
+    <Content Remove="web/**" />
+    <None Remove="web/**" />
+    <EmbeddedResource Remove="web/**" />
+  </ItemGroup>
 </Project>

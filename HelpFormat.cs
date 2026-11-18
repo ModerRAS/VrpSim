@@ -26,7 +26,7 @@ public static class HelpFormat
 
     public static int BufferWidth()
     {
-        try { var w = Console.BufferWidth; return w > 0 ? w : 120; }
+        try { var w = Platform.Width; return w > 0 ? w : 120; }
         catch { return 120; }
     }
 

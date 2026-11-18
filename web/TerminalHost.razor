@@ -1,0 +1,23 @@
+@inject IJSRuntime JS
+@implements IDisposable
+
+<div id="term" class="term">
+    <div id="term-output" class="term-output"></div>
+    <div id="term-inputline" class="term-inputline">
+        <span id="term-prompt" class="term-prompt"></span><span id="term-buffer" class="term-buffer"></span><span class="term-cursor">_</span>
+    </div>
+    <input id="term-key" class="term-key" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+</div>
+
+@code {
+    private DotNetObjectReference<EngineService>? _engineRef;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _engineRef = DotNetObjectReference.Create(new EngineService());
+        await JS.InvokeVoidAsync("VrpTerm.start", _engineRef);
+    }
+
+    public void Dispose() => _engineRef?.Dispose();
+}

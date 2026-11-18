@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>VrpSim.Web</RootNamespace>
+    <AssemblyName>VrpSim.Web</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.*" />
+  </ItemGroup>
+
+  <!-- 与控制台版共用同一套命令/设备/自查逻辑（纯逻辑文件，不依赖 Console/File 入口） -->
+  <ItemGroup>
+    <Compile Include="..\Cli.cs" Link="Shared\Cli.cs" />
+    <Compile Include="..\Commands.cs" Link="Shared\Commands.cs" />
+    <Compile Include="..\Device.cs" Link="Shared\Device.cs" />
+    <Compile Include="..\Checks.cs" Link="Shared\Checks.cs" />
+    <Compile Include="..\HelpFormat.cs" Link="Shared\HelpFormat.cs" />
+    <Compile Include="..\RunTimer.cs" Link="Shared\RunTimer.cs" />
+    <Compile Include="..\Platform.cs" Link="Shared\Platform.cs" />
+  </ItemGroup>
+
+</Project>

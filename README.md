@@ -7,6 +7,14 @@ Tab 补全、`?` 帮助、缩写执行、视图切换、`display current-configu
 `interface range` 批量配置、`port-group` 端口组、外加 14 项加固自查评分。
 C# / .NET 10 实现，无第三方依赖，发布为 **NativeAOT 原生单文件 exe**（约 3.5 MB，不需要 .NET 运行时）。
 
+## 网页版（GitHub Pages，免安装）
+
+在线地址：**https://moderras.github.io/VrpSim/** —— 纯前端（Blazor WebAssembly），不需要服务器，浏览器打开即用。
+
+- 和桌面版共用同一套命令树/补全/`?`/`check`/`display current-configuration` 逻辑（源码在 `web/`，共享根目录的 `Cli.cs`/`Commands.cs`/`Device.cs` 等）
+- 存档只存在当前页面内存里（刷新即重置，`save` 写页面内配置）——桌面版才落盘 `vrp-sim-state.json`
+- 首次加载约 2–3 MB（WASM 运行时，之后浏览器缓存）；构建/部署见 `.github/workflows/pages.yml`
+
 ## 快速开始
 
 ```text

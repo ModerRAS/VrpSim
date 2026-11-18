@@ -519,7 +519,7 @@ public static class CommandSets
         if (s.Interactive && s.ReadLine != null)
         {
             // 真机两段式：先提示写入，再单独一行询问
-            Console.WriteLine("The current configuration will be written to the device.");
+            Platform.WriteLine("The current configuration will be written to the device.");
             var ans = s.ReadLine("Are you sure to continue?[Y/N]:") ?? "";
             if (!ans.Trim().StartsWith("y", StringComparison.OrdinalIgnoreCase))
                 return new[] { "Info: The operation is canceled." };
@@ -529,7 +529,7 @@ public static class CommandSets
             lines.Add("The current configuration will be written to the device.");
             lines.Add("Are you sure to continue?[Y/N]:y");
         }
-        try { File.WriteAllLines("saved-config.cfg", c.Dev.RenderConfig()); } catch { }
+        Platform.WriteSavedConfig(c.Dev.RenderConfig());
         s.Saved = true;
         lines.Add("Now saving the current configuration to the slot 0.");
         lines.Add("Save the configuration successfully.");
@@ -540,7 +540,7 @@ public static class CommandSets
     {
         try
         {
-            if (File.Exists("saved-config.cfg")) return File.ReadAllLines("saved-config.cfg").ToList();
+            return Platform.ReadSavedConfig().ToList();
         }
         catch { }
         return new List<string> { "Info: The saved configuration file does not exist." };
@@ -599,7 +599,7 @@ public static class CommandSets
             {
                 c.S.Dev = Device.Factory();
                 c.S.View = "user";
-                StateStore.Delete(StateStore.DefaultPath);
+                Platform.ResetState();
                 return new[] { "  Info: The device has been reset to factory default." };
             }
         }.T(),
@@ -919,7 +919,7 @@ public static class CommandSets
 
     static bool Confirm(ExecCtx c, string warning)
     {
-        Console.WriteLine("Warning: " + warning);
+        Platform.WriteLine("Warning: " + warning);
         if (!c.S.Interactive || c.S.ReadLine == null) return true;
         var ans = c.S.ReadLine("");
         return ans != null && ans.Trim().StartsWith("y", StringComparison.OrdinalIgnoreCase);
