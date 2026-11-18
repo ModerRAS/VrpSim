@@ -20,6 +20,7 @@ public static class StateStore
         public bool StelnetV4, StelnetV6;
         public bool SnmpAgent, SnmpTrapEnable;
         public string SnmpVersion = "v3";
+        public int? SnmpAcl;
         public string SnmpContact = "";
         public string SnmpLocation = "";
         public string MonitorIp = "192.168.12.1";
@@ -94,7 +95,7 @@ public static class StateStore
             HttpServer = d.HttpServer, HttpsServer = d.HttpsServer,
             StelnetV4 = d.StelnetV4, StelnetV6 = d.StelnetV6,
             SnmpAgent = d.SnmpAgent, SnmpTrapEnable = d.SnmpTrapEnable,
-            SnmpVersion = d.SnmpVersion, SnmpContact = d.SnmpContact, SnmpLocation = d.SnmpLocation, MonitorIp = d.MonitorIp,
+            SnmpVersion = d.SnmpVersion, SnmpAcl = d.SnmpAcl, SnmpContact = d.SnmpContact, SnmpLocation = d.SnmpLocation, MonitorIp = d.MonitorIp,
             InfoCenterEnabled = d.InfoCenterEnabled, AdminDeleted = d.AdminDeleted,
             Vlans = d.Vlans.OrderBy(v => v).ToList(),
             LogHosts = d.LogHosts.ToList(),
@@ -179,6 +180,7 @@ public static class StateStore
         d.StelnetV4 = s.StelnetV4; d.StelnetV6 = s.StelnetV6;
         d.SnmpAgent = s.SnmpAgent; d.SnmpTrapEnable = s.SnmpTrapEnable;
         d.SnmpVersion = s.SnmpVersion;
+        d.SnmpAcl = s.SnmpAcl;
         d.SnmpContact = s.SnmpContact ?? ""; d.SnmpLocation = s.SnmpLocation ?? "";
         d.MonitorIp = s.MonitorIp;
         d.InfoCenterEnabled = s.InfoCenterEnabled; d.AdminDeleted = s.AdminDeleted;

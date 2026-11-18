@@ -619,6 +619,7 @@ public static class CommandSets
             .T(new Lit("user"), ValUser, new Lit("service-type"), new Val("t", "<service-type>")),
         C("snmp-agent", "SNMP agent", SnmpRun)
             .T()
+            .T(new Lit("acl", "Set ACL for SNMP access"), new Val("aclnum", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _)))
             .T(new Lit("community"), new Val("dir", "{read|write}", (d, p) => SugOf(new[] { "read", "write" }, p)),
                 new Opt(new Lit("cipher", "Cipher text")), new Val("pw", "STRING<1-32>"),
                 new Opt(new Lit("acl"), new Val("aclnum", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _))))
@@ -857,6 +858,11 @@ public static class CommandSets
         if (t.Count >= 2 && new[] { "extend", "group", "inform", "local-engineid", "manner", "mib-view", "notification-log", "notify-filter-profile", "packet", "packet-priority", "set-cache", "usm-user" }
                 .Any(x => Eq(t[1], x)))
             return Array.Empty<string>();
+        if (t.Count >= 2 && Eq(t[1], "acl"))
+        {
+            if (IsInt(c.Cap("aclnum"), out var aclNum)) d.SnmpAcl = aclNum;
+            return Array.Empty<string>();
+        }
         if (t.Count >= 2 && Eq(t[1], "community"))
         {
             var com = new SnmpCommunity { Read = !Eq(c.Cap("dir"), "write"), Password = c.Cap("pw") };
@@ -959,6 +965,7 @@ public static class CommandSets
         u.T(new Lit("stelnet"), new Lit("ipv6"), new Lit("server"), new Lit("enable"));
         u.T(new Lit("snmp-agent"));
         u.T(new Lit("snmp-agent"), new Lit("trap"), new Lit("enable"));
+        u.T(new Lit("snmp-agent"), new Lit("acl"));
         u.T(new Lit("acl"), new Lit("number"), new Val("num", "<2000-3999>", AclSug));
         u.T(new Lit("sysname"));
         u.T(new Lit("info-center"), new Lit("enable"));
@@ -989,7 +996,8 @@ public static class CommandSets
             case "stelnet server enable":
             case "stelnet ipv4 server enable": d.StelnetV4 = false; return Array.Empty<string>();
             case "stelnet ipv6 server enable": d.StelnetV6 = false; return Array.Empty<string>();
-            case "snmp-agent": d.SnmpAgent = false; d.Communities.Clear(); d.Targets.Clear(); d.SnmpTrapEnable = false; return Array.Empty<string>();
+            case "snmp-agent": d.SnmpAgent = false; d.Communities.Clear(); d.Targets.Clear(); d.SnmpTrapEnable = false; d.SnmpAcl = null; return Array.Empty<string>();
+            case "snmp-agent acl": d.SnmpAcl = null; return Array.Empty<string>();
             case "snmp-agent trap enable": d.SnmpTrapEnable = false; return Array.Empty<string>();
             case "sysname": d.SysName = "HUAWEI"; return Array.Empty<string>();
             case "clock timezone": d.Clock.Tz = null; d.Clock.TzOffsetSec = 0; return Array.Empty<string>();

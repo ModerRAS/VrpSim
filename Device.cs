@@ -108,6 +108,7 @@ public sealed class Device
     public bool StelnetV4, StelnetV6;
     public bool SnmpAgent, SnmpTrapEnable;
     public string SnmpVersion = "v3";
+    public int? SnmpAcl;
     public string SnmpContact = "";
     public string SnmpLocation = "";
     public bool InfoCenterEnabled = true;
@@ -262,6 +263,7 @@ public sealed class Device
             if (SnmpContact.Length > 0) L.Add($"snmp-agent sys-info contact {SnmpContact}");
             if (SnmpLocation.Length > 0) L.Add($"snmp-agent sys-info location {SnmpLocation}");
             L.Add($"snmp-agent sys-info version {SnmpVersion}");
+            if (SnmpAcl is int snmpAcl) L.Add($"snmp-agent acl {snmpAcl}");
             foreach (var t in Targets)
                 L.Add($"snmp-agent target-host trap address udp-domain {t.Ip}" + (t.Port != 162 ? $" udp-port {t.Port}" : "") +
                       $" params securityname cipher {Cipher(t.Security)} {t.Version}");
