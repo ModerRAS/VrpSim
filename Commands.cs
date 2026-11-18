@@ -95,11 +95,19 @@ public static class CommandSets
     // 接口编号只接受 "0/0/1" 这类数字/斜杠串，防止把 "to" 之类关键字吃成编号
     static bool IsIfNumToken(string t) => t.Length > 0 && t.All(ch => char.IsDigit(ch) || ch == '/');
 
-    static bool IsIfaceKindToken(string t) =>
-        IfKinds.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
+    // 接口类型缩写：大小写不限、取唯一前缀（int vlan 20 -> Vlanif；int g 0/0/1 -> GigabitEthernet）
+    static string? ResolveKind(string t, string[] kinds)
+    {
+        if (t.Length == 0) return null;
+        var exact = kinds.FirstOrDefault(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
+        if (exact != null) return exact;
+        var pref = kinds.Where(k => k.StartsWith(t, StringComparison.OrdinalIgnoreCase)).ToList();
+        return pref.Count == 1 ? pref[0] : null;
+    }
 
-    static bool IsRangeKindToken(string t) =>
-        IfRangeKinds.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
+    static bool IsIfaceKindToken(string t) => ResolveKind(t, IfKinds) != null;
+
+    static bool IsRangeKindToken(string t) => ResolveKind(t, IfRangeKinds) != null;
 
     // 类型+编号连写（Ethernet0/0/1、GigabitEthernet0/0/1、Vlanif8）——真机输入不认
     static bool IsConcatIfaceToken(string t)
@@ -166,18 +174,26 @@ public static class CommandSets
         d.Vlans.OrderBy(v => v).Select(v => new Candidate(v.ToString(), ""));
 
 
-    // 接口类型按真机口径要写全称（不接受 Eth/Gi 这种缩写），大小写不限
-    static readonly Func<string, bool> IfKindAccept = t =>
-        IfKinds.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
+    // 接口类型接受全称与唯一前缀缩写（真机 int vlan 20 / int g 0/0/1 均有效），大小写不限
+    static readonly Func<string, bool> IfKindAccept = t => ResolveKind(t, IfKinds) != null;
 
-    static readonly Func<string, bool> IfRangeKindAccept = t =>
-        IfRangeKinds.Any(k => k.Equals(t, StringComparison.OrdinalIgnoreCase));
+    static readonly Func<string, bool> IfRangeKindAccept = t => ResolveKind(t, IfRangeKinds) != null;
 
-    static string CanonIfaceKind(string k)
+    static string CanonIfaceKind(string k) => ResolveKind(k, IfKinds) ?? k;
+
+    // 缩写类型+编号连写：g0/0/1、vlan20、gi0/0/1；全称连写（Ethernet0/0/1 / GigabitEthernet0/0/1）仍按真机报错
+    static bool TryParseAbbrevIface(string t, out string kind, out string num)
     {
-        foreach (var x in IfKinds)
-            if (x.Equals(k, StringComparison.OrdinalIgnoreCase)) return x;
-        return k;
+        kind = ""; num = "";
+        var i = 0;
+        while (i < t.Length && (char.IsLetter(t[i]) || t[i] == '-')) i++;
+        if (i == 0 || i == t.Length) return false;
+        var p = t.Substring(0, i);
+        var rest = t.Substring(i);
+        if (!rest.All(ch => char.IsDigit(ch) || ch == '/')) return false;
+        var k = ResolveKind(p, IfKinds);
+        if (k == null || k.Equals(p, StringComparison.OrdinalIgnoreCase)) return false;
+        kind = k; num = rest; return true;
     }
 
     // 完整接口名的大小写规范化：ethernet0/0/1 -> Ethernet0/0/1（真机拼写）
@@ -599,6 +615,8 @@ public static class CommandSets
                 new Val("bad0", "<interface>", null, _ => true, null, true),
                 new Rep(new Val("badN", "<interface>", null, _ => true, null, true), 7))
             .T(new Val("kind", "<interface-type>", IfKindSug, IfKindAccept, null, true), new Val("num", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind")))
+            // 缩写类型+编号连写：int g0/0/1 / int vlan20（真机有效）
+            .T(new Val("abbr", "<interface>", null, s => TryParseAbbrevIface(s, out _, out _), null, true))
             .T(new Val("if", "<interface>", null, IsIfaceNameToken, null, true)),
         C("port-group", "Enter port group view", EnterPortGroup)
             .T(new Val("pg", "STRING<1-32>", (d, p) => d.PortGroups.Keys.OrderBy(k => k).Select(k => new Candidate(k, "")))),
@@ -720,29 +738,43 @@ public static class CommandSets
         {
             return EnterRange(c);
         }
-        // 真机输入只接受"类型 + 编号"分开写；Ethernet0/0/1 / Vlanif8 这类连写直接按真机报错
-        // （NULL0 例外：eNSP/真机 interface NULL 0 与 interface NULL0 两种写法都接受）
-        if (c.Has("if") && !Eq(c.Cap("if"), "NULL0"))
-            return ErrAt(c, 1, "Wrong parameter found at '^' position.");
-        var kind = CanonIfaceKind(c.Cap("kind"));
-        var num = c.Cap("num");
-        if (!c.Has("if") && Eq(kind, "NULL") && !Eq(num, "0"))
-            return ErrAt(c, 2, "Wrong parameter found at '^' position.");
-        var name = c.Has("if")
-            ? "NULL0"
-            : (Eq(kind, "NULL") ? "NULL0" : kind + num);
+        // 真机口径：
+        //  · 全称必须与编号分开写（Ethernet0/0/1 / GigabitEthernet0/0/1 连写报错）
+        //  · 类型可缩写（int vlan 20 / int g 0/0/1）
+        //  · 缩写+编号连写有效（int g0/0/1 / int vlan20）
+        //  · NULL0 例外：interface NULL 0 与 interface NULL0 都接受
+        string kind, num, name;
+        int at;
+        if (c.Has("abbr"))
+        {
+            if (!TryParseAbbrevIface(c.Cap("abbr"), out kind, out num))
+                return ErrAt(c, 1, "Wrong parameter found at '^' position.");
+            name = Eq(kind, "NULL") ? "NULL0" : kind + num;
+            at = 1;
+        }
+        else
+        {
+            if (c.Has("if") && !Eq(c.Cap("if"), "NULL0"))
+                return ErrAt(c, 1, "Wrong parameter found at '^' position.");
+            kind = CanonIfaceKind(c.Cap("kind"));
+            num = c.Cap("num");
+            if (!c.Has("if") && Eq(kind, "NULL") && !Eq(num, "0"))
+                return ErrAt(c, 2, "Wrong parameter found at '^' position.");
+            name = c.Has("if") ? "NULL0" : (Eq(kind, "NULL") ? "NULL0" : kind + num);
+            at = 2;
+        }
         if (!c.Dev.Ifaces.ContainsKey(name))
         {
             if (Eq(kind, "Vlanif"))
             {
-                if (!IsInt(num, out var vlan)) return ErrAt(c, 2, "Wrong parameter found at '^' position.");
+                if (!IsInt(num, out var vlan)) return ErrAt(c, at, "Wrong parameter found at '^' position.");
                 if (!c.Dev.Vlans.Contains(vlan)) return Err("The VLAN does not exist.");
                 c.Dev.Ifaces[name] = new Iface { Name = name, IsVlanif = true };
             }
             else if (Eq(kind, "Eth-Trunk") || Eq(kind, "LoopBack") || Eq(kind, "Tunnel"))
             {
                 var max = Eq(kind, "Eth-Trunk") ? 127 : 1023;
-                if (!IsInt(num, out var n) || n < 0 || n > max) return ErrAt(c, 2, "Wrong parameter found at '^' position.");
+                if (!IsInt(num, out var n) || n < 0 || n > max) return ErrAt(c, at, "Wrong parameter found at '^' position.");
                 c.Dev.Ifaces[name] = new Iface { Name = name };
             }
             else return Err("Wrong parameter found at '^' position.");

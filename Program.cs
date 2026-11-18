@@ -331,7 +331,7 @@ public static class Program
         foreach (var l in Checks.Format(rows, s.Dev)) Console.WriteLine(l);
         var fails = rows.Where(r => r.Ok == false).ToList();
         var candFailed = CompletionSelfTest(s) + CompletionOrderSelfTest(s) + RangeExecSelfTest()
-                         + IfaceFormSelfTest() + VlanExecSelfTest() + NullIfaceSelfTest() + ConfigIfaceSelfTest(s)
+                         + IfaceFormSelfTest() + VlanExecSelfTest() + NullIfaceSelfTest() + IfaceAbbrevSelfTest() + ConfigIfaceSelfTest(s)
                          + NoErrorSelfTest() + NewIfaceSelfTest() + HelpFormatSelfTest() + TimerSelfTest();
         if (fails.Count > 0 || candFailed > 0)
         {
@@ -366,6 +366,8 @@ public static class Program
             ("system", "interface ethernet", false, new[] { "Ethernet" }, new[] { "Ethernet0/0/1" }),
             ("system", "interface NULL ", false, new[] { "0" }, null),
             ("system", "interface Vlanif ", false, new[] { "1", "8" }, null),
+            ("system", "interface vlan", false, new[] { "Vlanif" }, null),
+            ("system", "interface g", false, new[] { "GigabitEthernet" }, null),
             ("system", "interface GigabitEthernet ", false, new[] { "0/0/1", "0/0/12" }, null),
             ("system", "interface Ethernet ", false, new[] { "0/0/1", "0/0/16" }, null),
             ("system", "interface range ", true, new[] { "Ethernet", "GigabitEthernet", "Vlanif" },
@@ -672,6 +674,46 @@ public static class Program
         Console.WriteLine(failed == 0
             ? "NULL IFACE OK: 3/3 cases"
             : $"NULL IFACE: {3 - failed}/3 cases passed");
+        return failed;
+    }
+
+    // 接口类型缩写回归（用户真机反馈：int vlan 20 / int g0/0/1 都有效）
+    static int IfaceAbbrevSelfTest()
+    {
+        var cases = new (string Label, string[] Lines, bool WantError, string IfName, string ErrPart)[]
+        {
+            ("abbrev-kind", new[] { "system-view", "vlan 20", "quit", "int vlan 20" }, false, "Vlanif20", ""),
+            ("abbrev-concat", new[] { "system-view", "vlan 20", "quit", "interface vlan20" }, false, "Vlanif20", ""),
+            ("abbrev-no-vlan", new[] { "system-view", "int vlan 30" }, true, "", "The VLAN does not exist."),
+            ("abbrev-g-concat", new[] { "system-view", "int g0/0/1" }, false, "GigabitEthernet0/0/1", ""),
+            ("abbrev-g-space", new[] { "system-view", "int g 0/0/1" }, false, "GigabitEthernet0/0/1", ""),
+            ("full-concat-g", new[] { "system-view", "interface GigabitEthernet0/0/1" }, true, "", "Wrong parameter"),
+            ("full-concat-eth", new[] { "system-view", "interface Ethernet0/0/1" }, true, "", "Wrong parameter"),
+            ("ambiguous-prefix", new[] { "system-view", "interface e 0/0/1" }, true, "", ""),
+        };
+        var failed = 0;
+        foreach (var tc in cases)
+        {
+            var dev = Device.Factory();
+            var sess = new Session { Dev = dev };
+            var last = new ExecResult();
+            foreach (var line in tc.Lines)
+            {
+                last = Cli.Execute(dev, sess, sess.Commands(), Tokenize(line));
+                if (last.Error != null) break;
+            }
+            var errText = (last.Error ?? "") + " " + string.Join(" ", last.Lines);
+            var gotErr = last.Error != null || last.Lines.Any(l => l.StartsWith("Error:", StringComparison.Ordinal));
+            var ok = tc.WantError
+                ? gotErr && errText.Contains(tc.ErrPart, StringComparison.OrdinalIgnoreCase) && sess.View == "system"
+                : !gotErr && sess.View == "iface" && sess.IfName == tc.IfName && dev.Ifaces.ContainsKey(tc.IfName);
+            if (ok) continue;
+            failed++;
+            Console.WriteLine($"  IFACE ABBREV FAIL: {tc.Label} -> view={sess.View} if={sess.IfName} err={errText.Trim()}");
+        }
+        Console.WriteLine(failed == 0
+            ? $"IFACE ABBREV OK: {cases.Length}/{cases.Length} cases"
+            : $"IFACE ABBREV: {cases.Length - failed}/{cases.Length} cases passed");
         return failed;
     }
 

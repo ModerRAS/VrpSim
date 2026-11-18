@@ -89,11 +89,12 @@ dotnet publish VrpSim.csproj -c Release -r win-x64 --self-contained true -p:Publ
 
 补全按 VRP 的缩写习惯工作：`disp` → `display`，`snmp-a` → `snmp-agent`，`sys` 能直接执行 `system-view`；
 关键字命中后按**规范全称**执行（`dis cu` 可用）。参数位置给候选：接口类型、已建 ACL、本地用户、VLAN、read/write、端口组名等。
-接口输入**只接受"类型 + 编号"分开写**：`interface GigabitEthernet 0/0/1`、`interface Vlanif 8`、`interface Ethernet 0/0/1`；
-`interface Ethernet0/0/1` / `interface Vlanif8` 这类连写在真机上直接报 `Wrong parameter found at '^' position.`（^ 指向连写 token），模拟器同口径。
-接口类型要写全称（`Eth-Trunk` / `Ethernet` / `GigabitEthernet` / `LoopBack` / `NULL` / `Tunnel` / `Vlanif`，大小写不限），`Eth 0/0/1` 这种缩写不认；
+接口输入按真机口径：类型可写**唯一前缀缩写**（`int vlan 20`、`int g 0/0/1`），缩写+编号也**可以连写**（`int g0/0/1`、`interface vlan20`）；
+全称写法 `interface GigabitEthernet 0/0/1`、`interface Vlanif 8`、`interface Ethernet 0/0/1` 同样接受；
+但**全称连写**（`interface GigabitEthernet0/0/1` / `interface Ethernet0/0/1` / `interface Vlanif8`）按真机报 `Wrong parameter found at '^' position.`（^ 指向连写 token），模拟器同口径。
+接口类型全称：`Eth-Trunk` / `Ethernet` / `GigabitEthernet` / `LoopBack` / `NULL` / `Tunnel` / `Vlanif`（大小写不限）；可缩写为唯一前缀（`vlan`→`Vlanif`、`g`/`gi`→`GigabitEthernet`、`lo`→`LoopBack`、`eth-`→`Eth-Trunk`…），有歧义的前缀（`e`/`eth`）不认；
 `Eth-Trunk` / `LoopBack` / `Tunnel` 按真机是"进视图即创建"（编号范围分别 0-127 / 0-1023 / 0-1023，越界报错），进 dis cu 与 `display this` 正常；
-`interface range` 只支持批量可配的 `Ethernet` / `GigabitEthernet` / `Vlanif` 三种；
+`interface range` 只支持批量可配的 `Ethernet` / `GigabitEthernet` / `Vlanif` 三种（类型同样可缩写）；
 **NULL 接口**：候选只出类型 `NULL`；`interface NULL 0` 与 `interface NULL0` 两种写法都接受，都进 `[HUAWEI-NULL0]`，
 `display this` 与配置渲染输出 `interface NULL0`（编号只允许 0，其它编号报错）；
 `interface range` 两端类型可混用大小写（`interface range ethernet 0/0/1 to Ethernet 0/0/16` 合法），进视图与配置渲染统一成规范拼写
@@ -181,7 +182,7 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 | 视图 | 命令 |
 | --- | --- |
 | 用户 `<HUAWEI>` | `system-view`、`quit`、`return`、`display …`、`save`、`check`、`reset` |
-| 系统 `[HUAWEI]` | `sysname`、`aaa`（含 abnormal/offline/online-fail-record 子命令）、`acl [number] <2000-5999>`（2000-2999/3000-3999/4000-4999/5000-5999 四段 + `ipv6`/`name` 写法）、`interface <类型> <编号>`（**必须分开写**，连写报错；类型见上，Eth-Trunk/LoopBack/Tunnel 进视图即创建）、`interface range <类型> <编号> to <类型> <编号>`、`port-group <名>`、`vlan batch <id…>`、`vlan <id>`（进 VLAN 视图）、`stelnet (ipv4/ipv6) server enable` / `stelnet <IP>`、`rsa local-key-pair create` / `rsa peer-public-key`、`ssh client first-time`、`ssh user`、`snmp-agent`（acl <2000-3999> / community / sys-info contact\|location\|version / target-host inform\|trap / trap disable\|enable\|life\|queue-size\|source\|suppress\|type / extend / group / inform / local-engineid / manner / mib-view / notification-log / notify-filter-profile / packet / packet-priority / set-cache / usm-user）、`info-center`（channel/console/enable/filter-id/local/logbuffer/loghost/monitor/rate-limit/snmp/source/statistic-suppress/timestamp/trapbuffer）、`clock timezone`、`clock datetime`、`user-interface [<整数>\|console\|current\|maximum-vty\|vty]`、`undo …` |
+| 系统 `[HUAWEI]` | `sysname`、`aaa`（含 abnormal/offline/online-fail-record 子命令）、`acl [number] <2000-5999>`（2000-2999/3000-3999/4000-4999/5000-5999 四段 + `ipv6`/`name` 写法）、`interface <类型> <编号>`（类型可缩写、缩写可连写：`int vlan 20` / `int g0/0/1`；全称连写报错；Eth-Trunk/LoopBack/Tunnel 进视图即创建）、`interface range <类型> <编号> to <类型> <编号>`、`port-group <名>`、`vlan batch <id…>`、`vlan <id>`（进 VLAN 视图）、`stelnet (ipv4/ipv6) server enable` / `stelnet <IP>`、`rsa local-key-pair create` / `rsa peer-public-key`、`ssh client first-time`、`ssh user`、`snmp-agent`（acl <2000-3999> / community / sys-info contact\|location\|version / target-host inform\|trap / trap disable\|enable\|life\|queue-size\|source\|suppress\|type / extend / group / inform / local-engineid / manner / mib-view / notification-log / notify-filter-profile / packet / packet-priority / set-cache / usm-user）、`info-center`（channel/console/enable/filter-id/local/logbuffer/loghost/monitor/rate-limit/snmp/source/statistic-suppress/timestamp/trapbuffer）、`clock timezone`、`clock datetime`、`user-interface [<整数>\|console\|current\|maximum-vty\|vty]`、`undo …` |
 | AAA `[HUAWEI-aaa]` | `local-user <u> password cipher/irreversible-cipher/simple <pw> [privilege level <n>]`（一条命令可带权限；`service-type` 必须另起一条）、`local-user <u> privilege level`、`local-user <u> service-type`（8021x/bind/ftp/http/ppp/ssh/telnet/terminal/web/x25-pad）、`local-user <u> access-limit`/`ftp-directory`/`state`（接受不落配置）、`local-aaa-user wrong-password`、`local-aaa-user password policy administrator`、`user-password complexity-check`、`undo local-user` |
 | 本地管理员密码策略 `[HUAWEI-aaa-lupp-admin]` | `password expire <0-999>`、`password history record number <0-5>`、`display this`、`undo …`（`quit` 回 AAA 视图） |
 | ACL `[HUAWEI-acl-adv-3000]` | `rule [<id>] permit/deny [ip \| <gre/icmp/igmp/ipinip/ospf/tcp/udp> [source/destination <IP> <wildcard> \| source-port/destination-port eq/gt/lt/range … \| dscp/precedence/tos/tcp-flag/time-range/fragment/logging]]`、`rule <id> description`、`description TEXT`、`undo rule` |
