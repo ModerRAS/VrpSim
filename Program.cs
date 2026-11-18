@@ -331,7 +331,7 @@ public static class Program
         foreach (var l in Checks.Format(rows, s.Dev)) Console.WriteLine(l);
         var fails = rows.Where(r => r.Ok == false).ToList();
         var candFailed = CompletionSelfTest(s) + CompletionOrderSelfTest(s) + RangeExecSelfTest()
-                         + IfaceFormSelfTest() + VlanExecSelfTest() + NullIfaceSelfTest() + IfaceAbbrevSelfTest() + ConfigIfaceSelfTest(s)
+                         + IfaceFormSelfTest() + VlanExecSelfTest() + NullIfaceSelfTest() + IfaceAbbrevSelfTest() + Session2FidelitySelfTest() + ConfigIfaceSelfTest(s)
                          + NoErrorSelfTest() + NewIfaceSelfTest() + HelpFormatSelfTest() + TimerSelfTest();
         if (fails.Count > 0 || candFailed > 0)
         {
@@ -714,6 +714,92 @@ public static class Program
         Console.WriteLine(failed == 0
             ? $"IFACE ABBREV OK: {cases.Length}/{cases.Length} cases"
             : $"IFACE ABBREV: {cases.Length - failed}/{cases.Length} cases passed");
+        return failed;
+    }
+
+    // 真机 session 日志回归（session2.log：ip address 前缀掩码 / port-security / range 缩写回显 / Info 文案 / display this 范围）
+    static int Session2FidelitySelfTest()
+    {
+        var failed = 0;
+        var total = 0;
+        void Case(string label, bool ok, string detail = "")
+        {
+            total++;
+            if (ok) return;
+            failed++;
+            Console.WriteLine($"  SESSION2 FAIL: {label} -> {detail}");
+        }
+        (Device Dev, Session Sess, List<string> Out) Play(params string[] lines)
+        {
+            var dev = Device.Factory();
+            var sess = new Session { Dev = dev };
+            var list = new List<string>();
+            foreach (var line in lines)
+            {
+                var r = Cli.Execute(dev, sess, sess.Commands(), Tokenize(line));
+                if (r.Error != null) { list.Add("Error:" + r.Error); break; }
+                list.AddRange(r.Lines);
+            }
+            return (dev, sess, list);
+        }
+
+        // 1) ip address 两种掩码写法：前缀长度 / 点分，配置统一按点分渲染
+        var ip1 = Play("system-view", "vlan 10", "quit", "int vlan 10", "ip address 192.168.12.2 24");
+        Case("ip-address-prefix", ip1.Sess.View == "iface" && ip1.Dev.Ifaces.TryGetValue("Vlanif10", out var v10)
+            && v10!.Mask == "255.255.255.0"
+            && ip1.Dev.RenderIface(v10).Contains(" ip address 192.168.12.2 255.255.255.0"));
+        var ip2 = Play("system-view", "vlan 10", "quit", "int vlan 10", "ip address 192.168.12.2 255.255.255.0");
+        Case("ip-address-dotted", ip2.Dev.Ifaces["Vlanif10"].Mask == "255.255.255.0");
+        var ip3 = Play("system-view", "vlan 10", "quit", "int vlan 10", "ip address 192.168.12.2");
+        Case("ip-address-incomplete", ip3.Out.Any(x => x.Contains("Incomplete command")));
+
+        // 2) port-security：未启用时报错；启用后落配置；undo 清理
+        var ps1 = Play("system-view", "int g0/0/1", "port-security max-mac-num 1");
+        Case("portsec-need-enable", ps1.Out.Contains("Error: Port security is not enabled."));
+        var ps2 = Play("system-view", "int g0/0/1", "port-security enable", "port-security max-mac-num 5", "port-security mac-address sticky");
+        var psCfg = ps2.Dev.RenderIface(ps2.Dev.Ifaces["GigabitEthernet0/0/1"]);
+        Case("portsec-render", psCfg.Contains(" port-security enable") && psCfg.Contains(" port-security max-mac-num 5") && psCfg.Contains(" port-security mac-address sticky"));
+        var ps3 = Play("system-view", "int g0/0/1", "port-security enable", "port-security max-mac-num 5", "undo port-security");
+        Case("portsec-undo", !ps3.Dev.RenderIface(ps3.Dev.Ifaces["GigabitEthernet0/0/1"]).Any(x => x.Contains("port-security")));
+
+        // 3) interface range 缩写连写 + 逐成员回显
+        var rg = Play("system-view", "int range g0/0/2 to g0/0/11", "shutdown");
+        var echo = rg.Out.Where(x => x.StartsWith("[HUAWEI-GigabitEthernet0/0/") && x.EndsWith("]shutdown")).ToList();
+        Case("range-abbrev-echo", rg.Sess.View == "range" && rg.Sess.RangeIfaces.Count == 10 && echo.Count == 10
+            && rg.Dev.Ifaces["GigabitEthernet0/0/2"].Shutdown && rg.Dev.Ifaces["GigabitEthernet0/0/11"].Shutdown);
+
+        // 4) 真机 Info/Warning 文案
+        Case("info-vlan-batch", Play("system-view", "vlan batch 10 100").Out.Any(x => x.StartsWith("Info: This operation may take a few seconds")));
+        Case("info-acl-sacl", Play("system-view", "acl number 2000").Out.Any(x => x.Contains("SACL")));
+        Case("info-link-type", Play("system-view", "int g0/0/1", "port link-type access").Out.Any(x => x.Contains("wait for a moment...done.")));
+        Case("info-local-user-add", Play("system-view", "aaa", "local-user u1 password cipher Aa123!@#").Out.Contains("Info: Add a new user."));
+        var st1 = Play("system-view", "aaa", "local-user u1 password cipher Aa123!@#", "local-user u1 service-type ssh");
+        Case("info-service-type", st1.Out.Any(x => x.Contains("irreversible-cipher password")) && st1.Out.Any(x => x.Contains("After changing the rights")));
+        Case("info-infocenter-disable", Play("system-view", "undo info-center enable").Out.Contains("Info: Information center is disabled."));
+
+        // 5) stelnet server enable 同时启用 IPv4/IPv6
+        var stn = Play("system-view", "stelnet server enable");
+        Case("stelnet-both", stn.Dev.StelnetV4 && stn.Dev.StelnetV6
+            && stn.Dev.RenderSystemThis().Contains("stelnet ipv4 server enable")
+            && stn.Dev.RenderSystemThis().Contains("stelnet ipv6 server enable"));
+
+        // 6) community 无 acl 也可执行（Opt 结尾模板完成判定回归）
+        var cm = Play("system-view", "snmp-agent community read cipher ABC");
+        Case("snmp-community-no-acl", cm.Out.All(x => !x.StartsWith("Error")) && cm.Dev.Communities.Count == 1);
+
+        // 7) display this（系统视图）只显示系统视图自己的行，不含 aaa/acl/接口等子视图块
+        var dt = Play("system-view", "sysname yt", "vlan 20", "quit", "vlan batch 30", "stelnet server enable", "display this");
+        Case("display-this-system-scope", dt.Out.Contains("sysname yt") && dt.Out.Any(x => x.StartsWith("vlan batch") && x.Contains("30"))
+            && dt.Out.Any(x => x.Contains("stelnet ipv4 server enable"))
+            && !dt.Out.Any(x => x.StartsWith("interface GigabitEthernet"))
+            && !dt.Out.Any(x => x.Contains("local-user")));
+
+        // 8) console 视图提示符 [sys-ui-console0]
+        Case("ui-console-prompt", Play("system-view", "user-interface console 0").Sess.Prompt() == "[HUAWEI-ui-console0]");
+
+        Console.WriteLine(failed == 0
+            ? $"SESSION2 FIDELITY OK: {total}/{total} cases"
+            : $"SESSION2 FIDELITY: {total - failed}/{total} cases passed");
         return failed;
     }
 

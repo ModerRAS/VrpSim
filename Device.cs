@@ -53,11 +53,17 @@ public sealed class Iface
     public string? Ip, Mask;
     public bool IsVlanif;
     public bool Cabled;
+    // port-security（真机端口安全）
+    public bool PortSecurity;
+    public int PortSecurityMaxMac;      // 0 = 未配置
+    public bool PortSecuritySticky;
     public bool IsPort => Name.StartsWith("Ethernet") || Name.StartsWith("GigabitEthernet");
     public bool HasConfig => Shutdown || Description != null || LinkType != null || AccessVlan != null
-        || TrunkVlans.Count > 0 || Ip != null || TfIn != null || TfOut != null;
+        || TrunkVlans.Count > 0 || Ip != null || TfIn != null || TfOut != null
+        || PortSecurity || PortSecurityMaxMac > 0 || PortSecuritySticky;
     public bool PortConfigured => Description != null || LinkType != null || AccessVlan != null
-        || TrunkVlans.Count > 0 || TfIn != null || TfOut != null;
+        || TrunkVlans.Count > 0 || TfIn != null || TfOut != null
+        || PortSecurity || PortSecurityMaxMac > 0 || PortSecuritySticky;
 }
 
 public sealed class VlanCfg
@@ -185,7 +191,7 @@ public sealed class Device
 
     public string UiViewName(string name) => name.Replace(" ", "") switch
     {
-        "con0" => "ui-con0",
+        "con0" => "ui-console0",
         "vty04" => "ui-vty0-4",
         "vty1620" => "ui-vty16-20",
         _ => "ui-" + name.Replace(" ", "")
@@ -237,6 +243,9 @@ public sealed class Device
             if (i.LinkType != null) L.Add($" port link-type {i.LinkType}");
             if (i.AccessVlan is int av) L.Add($" port default vlan {av}");
             if (i.TrunkVlans.Count > 0) L.Add(" port trunk allow-pass vlan " + string.Join(" ", i.TrunkVlans.OrderBy(v => v)));
+            if (i.PortSecurity) L.Add(" port-security enable");
+            if (i.PortSecurityMaxMac > 0) L.Add($" port-security max-mac-num {i.PortSecurityMaxMac}");
+            if (i.PortSecuritySticky) L.Add(" port-security mac-address sticky");
             if (i.TfIn is int tin) L.Add($" traffic-filter inbound acl {tin}");
             if (i.TfOut is int tout) L.Add($" traffic-filter outbound acl {tout}");
             if (i.Ip != null) L.Add($" ip address {i.Ip} {i.Mask}");
@@ -386,6 +395,54 @@ public sealed class Device
         return (s.Substring(0, i + 1), int.TryParse(s.Substring(i + 1), out var m) ? m : -1);
     }
 
+    // 真机 display this（系统视图）只显示系统视图本身的配置行，不含 aaa/acl/接口/VLAN 等子视图块
+    public List<string> RenderSystemThis()
+    {
+        var L = new List<string>();
+        void Sep() => L.Add("#");
+        L.Add($"sysname {SysName}");
+        Sep();
+        if (LogHosts.Count > 0)
+        {
+            foreach (var h in LogHosts) L.Add($"info-center loghost {h}");
+            Sep();
+        }
+        var plainVlans = Vlans.Where(v => v != 1 && !HasVlanCfg(v)).OrderBy(v => v).ToList();
+        if (plainVlans.Count > 0)
+        {
+            L.Add("vlan batch " + CompressVlanRuns(plainVlans));
+            Sep();
+        }
+        var svc = new List<string>();
+        if (!HttpServer) svc.Add("undo http server enable");
+        if (!TelnetServer) svc.Add("undo telnet server enable");
+        if (HttpsServer) svc.Add("http secure-server enable");
+        if (svc.Count > 0) { L.AddRange(svc); Sep(); }
+        if (SnmpAgent)
+        {
+            L.Add("snmp-agent");
+            L.Add("snmp-agent local-engineid 800007DB03E0CC7A085C00");
+            foreach (var c in Communities)
+                L.Add($"snmp-agent community {(c.Read ? "read" : "write")} cipher {Cipher(c.Password)}" + (c.Acl is int n ? $" acl {n}" : ""));
+            if (SnmpContact.Length > 0) L.Add($"snmp-agent sys-info contact {SnmpContact}");
+            if (SnmpLocation.Length > 0) L.Add($"snmp-agent sys-info location {SnmpLocation}");
+            L.Add($"snmp-agent sys-info version {SnmpVersion}");
+            if (SnmpAcl is int snmpAcl) L.Add($"snmp-agent acl {snmpAcl}");
+            foreach (var t in Targets)
+                L.Add($"snmp-agent target-host trap address udp-domain {t.Ip}" + (t.Port != 162 ? $" udp-port {t.Port}" : "") +
+                      $" params securityname cipher {Cipher(t.Security)} {t.Version}");
+            if (SnmpTrapEnable) L.Add("snmp-agent trap enable");
+            Sep();
+        }
+        if (StelnetV4 || StelnetV6)
+        {
+            if (StelnetV4) L.Add("stelnet ipv4 server enable");
+            if (StelnetV6) L.Add("stelnet ipv6 server enable");
+            Sep();
+        }
+        return L;
+    }
+
     public List<string> RenderAcl(Acl a)
     {
         var L = new List<string> { $"acl number {a.Number}" };
@@ -401,6 +458,9 @@ public sealed class Device
         if (i.LinkType != null) L.Add($" port link-type {i.LinkType}");
         if (i.AccessVlan is int av) L.Add($" port default vlan {av}");
         if (i.TrunkVlans.Count > 0) L.Add(" port trunk allow-pass vlan " + string.Join(" ", i.TrunkVlans.OrderBy(v => v)));
+        if (i.PortSecurity) L.Add(" port-security enable");
+        if (i.PortSecurityMaxMac > 0) L.Add($" port-security max-mac-num {i.PortSecurityMaxMac}");
+        if (i.PortSecuritySticky) L.Add(" port-security mac-address sticky");
         if (i.TfIn is int tin) L.Add($" traffic-filter inbound acl {tin}");
         if (i.TfOut is int tout) L.Add($" traffic-filter outbound acl {tout}");
         if (i.Ip != null) L.Add($" ip address {i.Ip} {i.Mask}");

@@ -182,12 +182,12 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 | 视图 | 命令 |
 | --- | --- |
 | 用户 `<HUAWEI>` | `system-view`、`quit`、`return`、`display …`、`save`、`check`、`reset` |
-| 系统 `[HUAWEI]` | `sysname`、`aaa`（含 abnormal/offline/online-fail-record 子命令）、`acl [number] <2000-5999>`（2000-2999/3000-3999/4000-4999/5000-5999 四段 + `ipv6`/`name` 写法）、`interface <类型> <编号>`（类型可缩写、缩写可连写：`int vlan 20` / `int g0/0/1`；全称连写报错；Eth-Trunk/LoopBack/Tunnel 进视图即创建）、`interface range <类型> <编号> to <类型> <编号>`、`port-group <名>`、`vlan batch <id…>`、`vlan <id>`（进 VLAN 视图）、`stelnet (ipv4/ipv6) server enable` / `stelnet <IP>`、`rsa local-key-pair create` / `rsa peer-public-key`、`ssh client first-time`、`ssh user`、`snmp-agent`（acl <2000-3999> / community / sys-info contact\|location\|version / target-host inform\|trap / trap disable\|enable\|life\|queue-size\|source\|suppress\|type / extend / group / inform / local-engineid / manner / mib-view / notification-log / notify-filter-profile / packet / packet-priority / set-cache / usm-user）、`info-center`（channel/console/enable/filter-id/local/logbuffer/loghost/monitor/rate-limit/snmp/source/statistic-suppress/timestamp/trapbuffer）、`clock timezone`、`clock datetime`、`user-interface [<整数>\|console\|current\|maximum-vty\|vty]`、`undo …` |
+| 系统 `[HUAWEI]` | `sysname`、`aaa`（含 abnormal/offline/online-fail-record 子命令）、`acl [number] <2000-5999>`（2000-2999/3000-3999/4000-4999/5000-5999 四段 + `ipv6`/`name` 写法）、`interface <类型> <编号>`（类型可缩写、缩写可连写：`int vlan 20` / `int g0/0/1`；全称连写报错；Eth-Trunk/LoopBack/Tunnel 进视图即创建）、`interface range <类型> <编号> to <类型> <编号>`、`port-group <名>`、`vlan batch <id…>` / `vlan batch <id> to <id>`、`vlan <id>`（进 VLAN 视图）、`stelnet (ipv4/ipv6) server enable` / `stelnet <IP>`、`rsa local-key-pair create` / `rsa peer-public-key`、`ssh client first-time`、`ssh user`、`snmp-agent`（acl <2000-3999> / community / sys-info contact\|location\|version / target-host inform\|trap / trap disable\|enable\|life\|queue-size\|source\|suppress\|type / extend / group / inform / local-engineid / manner / mib-view / notification-log / notify-filter-profile / packet / packet-priority / set-cache / usm-user）、`info-center`（channel/console/enable/filter-id/local/logbuffer/loghost/monitor/rate-limit/snmp/source/statistic-suppress/timestamp/trapbuffer）、`clock timezone`、`clock datetime`、`user-interface [<整数>\|console\|current\|maximum-vty\|vty]`、`undo …` |
 | AAA `[HUAWEI-aaa]` | `local-user <u> password cipher/irreversible-cipher/simple <pw> [privilege level <n>]`（一条命令可带权限；`service-type` 必须另起一条）、`local-user <u> privilege level`、`local-user <u> service-type`（8021x/bind/ftp/http/ppp/ssh/telnet/terminal/web/x25-pad）、`local-user <u> access-limit`/`ftp-directory`/`state`（接受不落配置）、`local-aaa-user wrong-password`、`local-aaa-user password policy administrator`、`user-password complexity-check`、`undo local-user` |
 | 本地管理员密码策略 `[HUAWEI-aaa-lupp-admin]` | `password expire <0-999>`、`password history record number <0-5>`、`display this`、`undo …`（`quit` 回 AAA 视图） |
 | ACL `[HUAWEI-acl-adv-3000]` | `rule [<id>] permit/deny [ip \| <gre/icmp/igmp/ipinip/ospf/tcp/udp> [source/destination <IP> <wildcard> \| source-port/destination-port eq/gt/lt/range … \| dscp/precedence/tos/tcp-flag/time-range/fragment/logging]]`、`rule <id> description`、`description TEXT`、`undo rule` |
-| 接口 `[HUAWEI-GigabitEthernet0/0/1]` | `description TEXT`、`port link-type`（access/dot1q-tunnel/hybrid/trunk）、`port default vlan`、`port trunk allow-pass vlan`、`port add-tag/discard/hybrid/link-flap/mux-vlan/priority/type/vlan-mapping/vlan-stacking`（接受不落配置）、`traffic-filter inbound/outbound acl`、`shutdown` / `undo shutdown`、`ip address`（仅 Vlanif）、`ip source`（接受）、`display this` |
-| 接口范围 `[HUAWEI-port-group]`（模拟器扩展） | 用 `interface range <类型> <编号> to <类型> <编号>` 进入（两端类型可混用大小写），支持 `shutdown`、`description`、`port …`、`traffic-filter …` 与对应 `undo` 批量生效；`ip address` 不支持 |
+| 接口 `[HUAWEI-GigabitEthernet0/0/1]` | `description TEXT`、`port link-type`（access/dot1q-tunnel/hybrid/trunk）、`port default vlan`、`port trunk allow-pass vlan`、`port add-tag/discard/hybrid/link-flap/mux-vlan/priority/type/vlan-mapping/vlan-stacking`（接受不落配置）、**`port-security enable` / `port-security max-mac-num <1-1024>` / `port-security mac-address sticky`**（未 enable 时配 max-mac-num 报 `Error: Port security is not enabled.`，落地进配置）、`traffic-filter inbound/outbound acl`、`shutdown` / `undo shutdown`、`ip address <IP> <点分掩码 | 前缀长度>`（仅 Vlanif；`ip address 192.168.12.2 24` 等价 `… 255.255.255.0`）、`ip source`（接受）、`display this` |
+| 接口范围 `[HUAWEI-port-group]`（模拟器扩展） | 用 `interface range <类型> <编号> to <类型> <编号>` 或真机缩写连写 `interface range g0/0/2 to g0/0/11` 进入（两端类型可混用大小写），支持 `shutdown`、`description`、`port …`、`port-security …`、`traffic-filter …` 与对应 `undo` 批量生效（**逐成员回显** `[HUAWEI-GigabitEthernet0/0/2]shutdown`，与真机一致）；`ip address` 不支持 |
 | 端口组 `[HUAWEI-port-group-<名>]` | `group-member <接口> [to <接口2>]`、`undo group-member [<接口>]`，以及接口视图的 `shutdown` / `description` / `port …` / `traffic-filter …` 批量作用于成员口 |
 | VLAN `[HUAWEI-vlan<id>]` | `description <text>`、`name <text>`、`undo description`、`undo name`、`display this`；`quit` 回系统视图；`vlan <id>` 已存在直接进、不存在则创建。`display this` 真机口径：**空 VLAN 只有 `#` + `return`**；有 description/name 才是 `#` / `vlan 200` / ` description …` / `#` / `return`（1 空格缩进） |
 | VTY `[HUAWEI-ui-vty0-4]` | `authentication-mode`、`acl <n> inbound`、`idle-timeout`、`protocol inbound` |
@@ -205,7 +205,7 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
   `port default vlan ` 给已有 VLAN、`local-user ` 给本地用户、`traffic-filter inbound acl ` 给 ACL 号、`destination-port` 给常用端口名。
 - **本地用户**：`local-user user password cipher Aa123!@# privilege level 15` 一条命令有效（口令 + 权限）；`service-type` 不能挂在同一条后面，必须单独 `local-user user service-type terminal ssh`。
 - **口令占位**：`local-user u password cipher ?` 显示 `STRING<8-64>`（类型提示），不是 `<password>`。
-- **`display this`**：按真机格式输出——配置块前后各一行 `#`，末尾跟 `return`；`interface range` 下按成员口一段一段分开，
+- **`display this`**：按真机格式输出——配置块前后各一行 `#`，末尾跟 `return`；**系统视图只显示系统视图自己的配置行**（sysname / loghost / vlan batch / 服务开关 / snmp / stelnet），不含 aaa/acl/接口/VLAN 等子视图块（子视图块只在 `display current-configuration` 里出现）；`interface range` 下按成员口一段一段分开，
   `[HUAWEI-aaa-lupp-admin]` 下输出的是嵌在 `aaa` 里的策略块。
 - **`save` 两段式**：先输出 `The current configuration will be written to the device.`，
   再单独一行问 `Are you sure to continue?[Y/N]:`，同意后输出 `Now saving the current configuration to the slot 0.` 与
@@ -277,15 +277,23 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 - 补全快照（第一批）只覆盖加固/配置演练路径（约 60 条），其余命令的候选/占位符留待后续批次调整
 - `?` 候选按"真机能看到的都补"原则处理：**有语义的落配置**（如 interface 类型创建、SNMP contact/location、trap enable/disable、ACL 区间）；
   **暂无语义的只做到"可见 + 敲了不报错"**（如 info-center 多数子命令、acl ipv6/name、user-interface maximum-vty、snmp trap life/queue-size/source/suppress/type），
-  这些命令不会进 `display current-configuration`（自检里用 74 条"无报错冒烟"守着）
+  这些命令不会进 `display current-configuration`（自检里用 78 条"无报错冒烟"守着）
 - 接口 `Eth-Trunk` / `LoopBack` / `Tunnel` 只实现"进视图即创建 + description/shutdown/dis cu/display this"最小行为，链路聚合/VPN 隧道语义不模拟
-- `interface` 只接受"类型 + 编号"分开写（真机口径）；配置回显仍是连写形式（`interface GigabitEthernet0/0/1`），这两者不矛盾
+- `interface` 接受"类型 + 编号"分开写、类型缩写（`int vlan 20`）、缩写+编号连写（`int g0/0/1`）；**全称连写**（`GigabitEthernet0/0/1` / `Ethernet0/0/1`）仍按真机报错；配置回显是连写形式
 - **MEth 不建模**（用户口径：16 个百兆 + 12 个千兆，不模拟管理口），`interface ?` 不显示 MEth；eNSP S5700 的那台 24GE 机型才会有
 - `?` 排版层不显示 `<cr>`（数据层保留可回车判定；真机 eNSP 会在可回车位置列出 `<cr>`，用户反馈"开头有不是表格的东西"后按两列格式统一去掉）
 - v1.5.0 第二批按 gap 报告补的候选里，`snmp-agent` 的 extend/group/mib-view/…、`local-user` 的 access-limit/ftp-directory/state、
   ACL 的 fragment/logging/time-range/tcp-flag 等**只做到"可见 + 敲了不报错"**，不落配置也不影响 `check` 评分；`port dot1q-tunnel` 仅记录 link-type 值，QinQ 语义不模拟
 - VLAN 视图只实现 `description` / `name` 最小集，真机的 `statistics`、`mac-vlan` 等未实现
 - `group-member` 仍按"完整接口名"输入与候选（如 `group-member GigabitEthernet0/0/1`），与 `interface` 的新口径暂不一致，待确认
+- **真机 console 日志对照补全（v1.6.4，用户提供 session2.log）**：
+  - `ip address` 掩码支持**点分**与**前缀长度**两种写法（`ip address 192.168.12.2 24` 等价 `... 255.255.255.0`），配置统一按点分渲染；缺掩码报 `Incomplete command`；
+  - **port-security**：`enable` / `max-mac-num <1-1024>` / `mac-address sticky`（未 enable 时配 max-mac-num 报 `Error: Port security is not enabled.`），落进接口配置块；
+  - `interface range g0/0/2 to g0/0/11` 缩写连写端点可用，批量执行时**逐成员回显** `[HUAWEI-GigabitEthernet0/0/2]shutdown`；
+  - 真机 Info/Warning 文案对齐：`vlan batch`、`port link-type`、`port trunk allow-pass vlan` 的 "This operation may take a few seconds..."、ACL 创建 SACL 提示、新建用户与服务类型两条 Info、`info-center enable/disable`、`stelnet server enable`；
+  - `stelnet server enable` 同时启用 IPv4/IPv6（dis cu 渲染两行）；`display this` 在系统视图只显示系统视图自己的配置行；
+  - `snmp-agent community read cipher <pw>`（不带 acl）可直接执行（修了结尾可选段不判完成导致的 "Incomplete"）；
+  - `vlan batch 10 to 12` 区间写法、console 视图提示符 `[HUAWEI-ui-console0]`。
 - **eNSP 版本差异**：eNSP 内置 S5700 是 **V200R001C00 / VRP 5.110**（2016 年前后），比真机 **V200R011C10SPC600** 老 6+ 代；
   本模拟器的接口写法/候选/VLAN 视图等口径以**用户真机 V200R011**为准，eNSP 只作旁证（两者命令行文案、默认值可能有出入，冲突不要照抄 eNSP）。
   已知具体差异：eNSP 这代没有 `Ethernet` 接口类型、`GigabitEthernet` 只认连写、没有 `interface range`、`acl` 区间与 `info-center` 子命令集合也不同——

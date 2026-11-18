@@ -212,6 +212,22 @@ public static class CommandSets
     static Val VInt(string n, string hint) => new(n, hint, null, s => IsInt(s, out _));
     static readonly Val AnyVal = new("x", "<text>", null, _ => true, null, true);
 
+    // ip address 掩码两种写法：点分（255.255.255.0）或前缀长度（24）
+    static bool IsMaskArg(string t) => IsIp(t) || (IsInt(t, out var m) && m >= 1 && m <= 32);
+
+    static string PrefixToMask(int bits)
+    {
+        var v = bits <= 0 ? 0u : uint.MaxValue << (32 - bits);
+        return $"{(v >> 24) & 255}.{(v >> 16) & 255}.{(v >> 8) & 255}.{v & 255}";
+    }
+
+    // 华为 H-H-H MAC（如 00e0-fc12-3456）
+    static bool IsMacH3(string t)
+    {
+        var p = t.Split('-');
+        return p.Length == 3 && p.All(x => x.Length == 4 && x.All(ch => Uri.IsHexDigit(ch)));
+    }
+
     static readonly Func<Device, string, IEnumerable<Candidate>> SugPermitDeny = (d, p) => SugOf(new[] { "permit", "deny" }, p);
     static readonly Func<Device, string, IEnumerable<Candidate>> SugTcpUdp = (d, p) => SugOf(new[] { "tcp", "udp" }, p);
     static readonly Func<Device, string, IEnumerable<Candidate>> SugCipherMode = (d, p) => SugOf(new[] { "cipher", "irreversible-cipher", "simple" }, p);
@@ -344,6 +360,13 @@ public static class CommandSets
             case "pg":
                 return WrapThis(d.RenderPortGroup(c.S.PgName,
                     d.PortGroups.TryGetValue(c.S.PgName, out var members) ? members : new List<string>()));
+            case "system":
+            {
+                var L = new List<string> { "#" };
+                L.AddRange(d.RenderSystemThis());
+                L.Add("return");
+                return L;
+            }
             case "range":
             {
                 var L = new List<string>();
@@ -610,6 +633,19 @@ public static class CommandSets
                 new Val("kind1", "<interface-type>", IfRangeKindSug, IfRangeKindAccept, null, true), new Val("num1", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind1")),
                 new Lit("to", "End of interface range"),
                 new Val("kind2", "<interface-type>", IfRangeKindSug, IfRangeKindAccept, null, true), new Val("num2", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind2")))
+            // 缩写连写端点：int range g0/0/2 to g0/0/11（真机有效）
+            .T(new Lit("range", "Set interface range"),
+                new Val("abbr1", "<interface>", null, s => TryParseAbbrevIface(s, out _, out _), null, true),
+                new Lit("to", "End of interface range"),
+                new Val("abbr2", "<interface>", null, s => TryParseAbbrevIface(s, out _, out _), null, true))
+            .T(new Lit("range", "Set interface range"),
+                new Val("kind1", "<interface-type>", IfRangeKindSug, IfRangeKindAccept, null, true), new Val("num1", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind1")),
+                new Lit("to", "End of interface range"),
+                new Val("abbr2", "<interface>", null, s => TryParseAbbrevIface(s, out _, out _), null, true))
+            .T(new Lit("range", "Set interface range"),
+                new Val("abbr1", "<interface>", null, s => TryParseAbbrevIface(s, out _, out _), null, true),
+                new Lit("to", "End of interface range"),
+                new Val("kind2", "<interface-type>", IfRangeKindSug, IfRangeKindAccept, null, true), new Val("num2", "<interface-number>", null, IsIfNumToken, IfNumCtx("kind2")))
             // 宽松模板：只为把"连写/漏写 to"等情况交给 EnterRange 按真机口径报错（合法写法由上面的拆分模板先命中）
             .T(new Lit("range", "Set interface range"),
                 new Val("bad0", "<interface>", null, _ => true, null, true),
@@ -622,6 +658,8 @@ public static class CommandSets
             .T(new Val("pg", "STRING<1-32>", (d, p) => d.PortGroups.Keys.OrderBy(k => k).Select(k => new Candidate(k, "")))),
         C("vlan", "Create VLAN and enter VLAN view", VlanRun)
             .T(new Lit("batch", "Batch process"), new Rep(new Val("id", "INTEGER<1-4094>", VlanSug, s => IsInt(s, out _))))
+            // 真机 vlan batch 10 20 to 30 写法（含 to 区间）
+            .T(new Lit("batch", "Batch process"), new Rep(new Val("v", "INTEGER<1-4094>", null, s => IsInt(s, out _) || Eq(s, "to"), null, true), 16))
             .T(new Val("id", "INTEGER<1-4094>", null, s => IsInt(s, out _))),
         C("rsa", "RSA key pair", RsaRun)
             .T(new Lit("local-key-pair"), new Lit("create"))
@@ -729,7 +767,7 @@ public static class CommandSets
         if (!c.Dev.Acls.ContainsKey(n)) c.Dev.Acls[n] = new Acl { Number = n };
         c.S.AclNumber = n;
         c.S.View = "acl";
-        return Array.Empty<string>();
+        return new[] { "Info: When the ACL that is referenced by SACL is modified, the SACL will be dynamically updated. During the update, these SACL will become invalid temporarily." };
     }
 
     static string[] EnterIface(ExecCtx c)
@@ -787,19 +825,22 @@ public static class CommandSets
     static string[] EnterRange(ExecCtx c)
     {
         var t = c.Tokens;
-        // 类型+编号连写（Ethernet0/0/1 …）：真机不认，^ 指向该 token
+        // 全称类型+编号连写（Ethernet0/0/1 …）：真机不认，^ 指向该 token
         for (var i = 1; i < t.Count; i++)
             if (IsConcatIfaceToken(t[i])) return ErrAt(c, i, "Wrong parameter found at '^' position.");
-        // 合法写法只有：interface range <type> <num> to <type> <num>
-        if (t.Count != 7) return ErrAt(c, Math.Min(t.Count, 2), "Wrong parameter found at '^' position.");
-        if (!IsRangeKindToken(t[2])) return ErrAt(c, 2, "Wrong parameter found at '^' position.");
-        if (!IsIfNumToken(t[3])) return ErrAt(c, 3, "Wrong parameter found at '^' position.");
-        if (!Eq(t[4], "to")) return ErrAt(c, 4, "Wrong parameter found at '^' position.");
-        if (!IsRangeKindToken(t[5])) return ErrAt(c, 5, "Wrong parameter found at '^' position.");
-        if (!IsIfNumToken(t[6])) return ErrAt(c, 6, "Wrong parameter found at '^' position.");
-        // 类型大小写不敏感、两端可混用；拼成规范名再查表（字典是大小写敏感的）
-        string left = CanonIfaceKind(t[2]) + t[3];
-        string right = CanonIfaceKind(t[5]) + t[6];
+        // 端点两种形态：<type> <num>（可缩写）或 缩写连写 g0/0/2（真机有效）
+        string? left = null, right = null;
+        if (c.Has("abbr1") && TryParseAbbrevIface(c.Cap("abbr1"), out var ak1, out var an1)) left = ak1 + an1;
+        else if (c.Has("kind1") && c.Has("num1")) left = CanonIfaceKind(c.Cap("kind1")) + c.Cap("num1");
+        if (c.Has("abbr2") && TryParseAbbrevIface(c.Cap("abbr2"), out var ak2, out var an2)) right = ak2 + an2;
+        else if (c.Has("kind2") && c.Has("num2")) right = CanonIfaceKind(c.Cap("kind2")) + c.Cap("num2");
+        if (left == null || right == null) return ErrAt(c, 2, "Wrong parameter found at '^' position.");
+        foreach (var body in new[] { left, right })
+        {
+            var i = 0;
+            while (i < body.Length && (char.IsLetter(body[i]) || body[i] == '-')) i++;
+            if (i == 0 || !IsRangeKindToken(body.Substring(0, i))) return Err("Wrong parameter found at '^' position.");
+        }
         var (p1, n1) = Device.SplitIfaceName(left);
         var (p2, n2) = Device.SplitIfaceName(right);
         if (!p1.Equals(p2, StringComparison.OrdinalIgnoreCase) || n1 < 0 || n2 < 0 || n1 > n2 || n2 - n1 + 1 > 64)
@@ -827,10 +868,21 @@ public static class CommandSets
 
     static string[] VlanBatch(ExecCtx c)
     {
-        var ids = c.Tokens.Skip(2).Select(x => IsInt(x, out var v) ? v : -1).Where(v => v > 0 && v <= 4094).ToList();
+        // 真机支持 vlan batch 10 20 30 与 vlan batch 10 to 20 两种写法
+        var ids = new List<int>();
+        var toks = c.Tokens.Skip(2).ToList();
+        for (var i = 0; i < toks.Count; i++)
+        {
+            if (i + 2 < toks.Count && Eq(toks[i + 1], "to") && IsInt(toks[i], out var a) && IsInt(toks[i + 2], out var b) && a > 0 && b >= a && b <= 4094)
+            {
+                for (var v = a; v <= b; v++) ids.Add(v);
+                i += 2;
+            }
+            else if (IsInt(toks[i], out var v) && v > 0 && v <= 4094) ids.Add(v);
+        }
         if (ids.Count == 0) return Err("Wrong parameter found at '^' position.");
         foreach (var v in ids) c.Dev.Vlans.Add(v);
-        return Array.Empty<string>();
+        return new[] { "Info: This operation may take a few seconds. Please wait for a moment...done." };
     }
 
     static string[] VlanRun(ExecCtx c)
@@ -877,7 +929,14 @@ public static class CommandSets
     {
         var t = c.Tokens.Select(x => x.ToLowerInvariant()).ToList();
         if (t.Count > 1 && t[1] == "ipv6") { c.Dev.StelnetV6 = true; return new[] { "Info: Succeeded in starting the Stelnet server." }; }
-        if (t.Count > 1 && (t[1] == "server" || t[1] == "ipv4")) { c.Dev.StelnetV4 = true; return new[] { "Info: Succeeded in starting the Stelnet server." }; }
+        if (t.Count > 1 && t[1] == "server")
+        {
+            // 真机 stelnet server enable 同时启用 IPv4/IPv6（dis cu 渲染两行）
+            c.Dev.StelnetV4 = true;
+            c.Dev.StelnetV6 = true;
+            return new[] { "Info: Succeeded in starting the Stelnet server." };
+        }
+        if (t.Count > 1 && t[1] == "ipv4") { c.Dev.StelnetV4 = true; return new[] { "Info: Succeeded in starting the Stelnet server." }; }
         // stelnet <IP/hostname>：客户端连接（模拟器不回放真实握手）
         return new[] { "Info: The command is executed successfully." };
     }
@@ -940,7 +999,13 @@ public static class CommandSets
             if (!c.Dev.LogHosts.Contains(ip)) c.Dev.LogHosts.Add(ip);
             return new[] { "Warning: There is security risk as this operation enables a non secure syslog protocol." };
         }
-        if (t.Count == 1 || (t.Count >= 2 && Eq(t[1], "enable"))) c.Dev.InfoCenterEnabled = true;
+        if (t.Count >= 2 && Eq(t[1], "enable"))
+        {
+            var was = c.Dev.InfoCenterEnabled;
+            c.Dev.InfoCenterEnabled = true;
+            return was ? Array.Empty<string>() : new[] { "Info: Information center is enabled." };
+        }
+        if (t.Count == 1) { c.Dev.InfoCenterEnabled = true; return Array.Empty<string>(); }
         // 其余 info-center 子命令（channel/console/filter-id/local/logbuffer/monitor/rate-limit/snmp/source/...）：接受不报错
         return Array.Empty<string>();
     }
@@ -1025,7 +1090,7 @@ public static class CommandSets
                 d.HttpServer = false;
                 return Array.Empty<string>();
             case "http secure-server enable": d.HttpsServer = false; return Array.Empty<string>();
-            case "stelnet server enable":
+            case "stelnet server enable": d.StelnetV4 = false; d.StelnetV6 = false; return Array.Empty<string>();
             case "stelnet ipv4 server enable": d.StelnetV4 = false; return Array.Empty<string>();
             case "stelnet ipv6 server enable": d.StelnetV6 = false; return Array.Empty<string>();
             case "snmp-agent": d.SnmpAgent = false; d.Communities.Clear(); d.Targets.Clear(); d.SnmpTrapEnable = false; d.SnmpAcl = null; return Array.Empty<string>();
@@ -1033,7 +1098,7 @@ public static class CommandSets
             case "snmp-agent trap enable": d.SnmpTrapEnable = false; return Array.Empty<string>();
             case "sysname": d.SysName = "HUAWEI"; return Array.Empty<string>();
             case "clock timezone": d.Clock.Tz = null; d.Clock.TzOffsetSec = 0; return Array.Empty<string>();
-            case "info-center enable": d.InfoCenterEnabled = false; return Array.Empty<string>();
+            case "info-center enable": d.InfoCenterEnabled = false; return new[] { "Info: Information center is disabled." };
             case "snmp-agent community": d.Communities.Clear(); return Array.Empty<string>();
             case "snmp-agent community read": d.Communities.RemoveAll(x => x.Read); return Array.Empty<string>();
             case "snmp-agent community write": d.Communities.RemoveAll(x => !x.Read); return Array.Empty<string>();
@@ -1117,7 +1182,8 @@ public static class CommandSets
         if (t.Count < 3) return Err("Incomplete command found at '^' position.");
         if (Eq(t[2], "password"))
         {
-            if (!d.Users.TryGetValue(name, out var u))
+            var isNew = !d.Users.TryGetValue(name, out var u);
+            if (u == null)
             {
                 u = new LocalUser { Name = name, Privilege = 0 };
                 d.Users[name] = u;
@@ -1125,7 +1191,7 @@ public static class CommandSets
             u.Password = c.Cap("pw");
             u.PasswordInitial = true;
             if (c.Has("n") && IsInt(c.Cap("n"), out var lv0)) u.Privilege = lv0;
-            return Array.Empty<string>();
+            return isNew ? new[] { "Info: Add a new user." } : Array.Empty<string>();
         }
         if (Eq(t[2], "access-limit") || Eq(t[2], "ftp-directory") || Eq(t[2], "state")) return Array.Empty<string>();
         if (!d.Users.TryGetValue(name, out var user)) return Err("The user does not exist.");
@@ -1138,7 +1204,11 @@ public static class CommandSets
         {
             user.ServiceTypes.Clear();
             foreach (var s in t.Skip(3)) user.ServiceTypes.Add(s);
-            return Array.Empty<string>();
+            return new[]
+            {
+                "Info: The cipher password has been changed to an irreversible-cipher password.",
+                "Info: After changing the rights (including the password, access type, FTP directory, HTTP directory, and level) of a local user, the rights of users already online do not change. The change takes effect to users who go online after the change."
+            };
         }
         return Array.Empty<string>();
     }
@@ -1345,8 +1415,13 @@ public static class CommandSets
                 new Val("num", "INTEGER<2000-3999>", AclSug, s => IsInt(s, out _))),
         C("shutdown", "Shut down interface", c => { foreach (var i in Targets(c)) i.Shutdown = true; return Array.Empty<string>(); }).T(),
         C("ip", "IP configuration", IpRun)
-            .T(new Lit("address"), ValIp, new Val("mask", "<X.X.X.X>"))
+            .T(new Lit("address", "IP address"), ValIp, new Val("mask", "MASK<1-32>|X.X.X.X", null, IsMaskArg))
             .T(new Lit("source", "Source"), new Rep(AnyVal, 3)),
+        C("port-security", "Port security", PortSecurityRun)
+            .T(new Lit("enable", "Enable port security"))
+            .T(new Lit("max-mac-num", "Maximum number of MAC addresses"), new Val("n", "INTEGER<1-1024>", null, s => IsInt(s, out var n) && n >= 1 && n <= 1024))
+            .T(new Lit("mac-address", "MAC address"), new Lit("sticky", "Sticky-MAC"))
+            .T(new Lit("mac-address", "MAC address"), new Val("mac", "H-H-H", null, IsMacH3)),
         UndoIfaceCmd,
         Nav("quit", "Exit current view", QuitRun),
         Nav("return", "Return to user view", ReturnRun),
@@ -1367,6 +1442,10 @@ public static class CommandSets
         u.T(new Lit("traffic-filter"), new Val("dir", "{inbound|outbound}", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)));
         u.T(new Lit("description"));
         u.T(new Lit("ip"), new Lit("address"));
+        u.T(new Lit("port-security"));
+        u.T(new Lit("port-security"), new Lit("enable"));
+        u.T(new Lit("port-security"), new Lit("max-mac-num"));
+        u.T(new Lit("port-security"), new Lit("mac-address"));
         return u;
     }
 
@@ -1379,7 +1458,7 @@ public static class CommandSets
         if (t.Count > 2 && Eq(t[1], "link-type"))
         {
             foreach (var i in Targets(c)) i.LinkType = t[2];
-            return Array.Empty<string>();
+            return new[] { "Info: This operation may take a few seconds. Please wait for a moment...done." };
         }
         if (t.Count > 3 && Eq(t[1], "default") && Eq(t[2], "vlan"))
         {
@@ -1393,7 +1472,7 @@ public static class CommandSets
             var ids = c.Tokens.Skip(4).Select(x => IsInt(x, out var v) ? v : -1).Where(v => v > 0).ToList();
             foreach (var v in ids) if (!c.Dev.Vlans.Contains(v)) return Err("The VLAN does not exist.");
             foreach (var i in Targets(c)) i.TrunkVlans = ids;
-            return Array.Empty<string>();
+            return new[] { "Info: This operation may take a few seconds. Please wait a moment...done." };
         }
         return Err("Incomplete command found at '^' position.");
     }
@@ -1416,10 +1495,43 @@ public static class CommandSets
         if (c.S.View == "range" || c.S.View == "pg") return Err("Unsupported operation on an interface range.");
         var i = SetIface(c);
         if (!i.IsVlanif) return Err("Unsupported operation on a physical port.");
-        if (!IsIp(c.Cap("ip")) || !IsIp(c.Cap("mask"))) return Err("Wrong parameter found at '^' position.");
+        var rawMask = c.Cap("mask");
+        if (!IsIp(c.Cap("ip"))) return Err("Wrong parameter found at '^' position.");
+        // 掩码两种写法：点分或前缀长度（真机 ip address 192.168.12.2 24 有效），统一按点分存/渲染
+        string mask;
+        if (IsInt(rawMask, out var bits) && bits >= 1 && bits <= 32) mask = PrefixToMask(bits);
+        else if (IsIp(rawMask)) mask = rawMask;
+        else return Err("Wrong parameter found at '^' position.");
         i.Ip = c.Cap("ip");
-        i.Mask = c.Cap("mask");
+        i.Mask = mask;
         return Array.Empty<string>();
+    }
+
+    static string[] PortSecurityRun(ExecCtx c)
+    {
+        var t = c.Tokens;
+        if (t.Count >= 2 && Eq(t[1], "enable"))
+        {
+            foreach (var i in Targets(c)) i.PortSecurity = true;
+            return Array.Empty<string>();
+        }
+        if (t.Count >= 2 && Eq(t[1], "max-mac-num"))
+        {
+            foreach (var i in Targets(c)) if (!i.PortSecurity) return Err("Port security is not enabled.");
+            if (!IsInt(c.Cap("n"), out var n)) return Err("Wrong parameter found at '^' position.");
+            foreach (var i in Targets(c)) i.PortSecurityMaxMac = n;
+            return Array.Empty<string>();
+        }
+        if (t.Count >= 2 && Eq(t[1], "mac-address"))
+        {
+            if (t.Count >= 3 && Eq(t[2], "sticky"))
+            {
+                foreach (var i in Targets(c)) i.PortSecuritySticky = true;
+            }
+            // 静态 MAC 地址只接受不落配置
+            return Array.Empty<string>();
+        }
+        return Err("Incomplete command found at '^' position.");
     }
 
     static string[] IfaceUndo(ExecCtx c)
@@ -1443,6 +1555,10 @@ public static class CommandSets
             if (k == "port default vlan") { i.AccessVlan = null; handled = true; continue; }
             if (k == "port link-type") { i.LinkType = null; handled = true; continue; }
             if (k.StartsWith("port trunk allow-pass vlan")) { i.TrunkVlans.Clear(); handled = true; continue; }
+            if (k == "port-security") { i.PortSecurity = false; i.PortSecurityMaxMac = 0; i.PortSecuritySticky = false; handled = true; continue; }
+            if (k == "port-security enable") { i.PortSecurity = false; handled = true; continue; }
+            if (k == "port-security max-mac-num") { i.PortSecurityMaxMac = 0; handled = true; continue; }
+            if (k.StartsWith("port-security mac-address")) { i.PortSecuritySticky = false; handled = true; continue; }
             if (Eq(t[1], "traffic-filter"))
             {
                 if (Eq(c.Cap("dir"), "inbound")) i.TfIn = null; else i.TfOut = null;
@@ -1486,6 +1602,10 @@ public static class CommandSets
         u.T(new Lit("traffic-filter"), new Val("dir", "{inbound|outbound}", (d, p) => SugOf(new[] { "inbound", "outbound" }, p)));
         u.T(new Lit("description"));
         u.T(new Lit("ip"), new Lit("address"));
+        u.T(new Lit("port-security"));
+        u.T(new Lit("port-security"), new Lit("enable"));
+        u.T(new Lit("port-security"), new Lit("max-mac-num"));
+        u.T(new Lit("port-security"), new Lit("mac-address"));
         return u;
     }
 

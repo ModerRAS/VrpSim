@@ -59,6 +59,7 @@ public static class StateStore
         public int? AccessVlan; public List<int> TrunkVlans = new();
         public int? TfIn, TfOut; public string? Ip, Mask;
         public bool IsVlanif, Cabled;
+        public bool PortSecurity; public int PortSecurityMaxMac; public bool PortSecuritySticky;
     }
     public sealed class UserState
     {
@@ -126,7 +127,8 @@ public static class StateStore
                 Name = i.Name, Shutdown = i.Shutdown, Description = i.Description, LinkType = i.LinkType,
                 AccessVlan = i.AccessVlan, TrunkVlans = i.TrunkVlans.ToList(),
                 TfIn = i.TfIn, TfOut = i.TfOut, Ip = i.Ip, Mask = i.Mask,
-                IsVlanif = i.IsVlanif, Cabled = i.Cabled
+                IsVlanif = i.IsVlanif, Cabled = i.Cabled,
+                PortSecurity = i.PortSecurity, PortSecurityMaxMac = i.PortSecurityMaxMac, PortSecuritySticky = i.PortSecuritySticky
             });
         }
         foreach (var u in d.Users.Values)
@@ -205,7 +207,8 @@ public static class StateStore
                 Name = i.Name, Shutdown = i.Shutdown, Description = i.Description, LinkType = i.LinkType,
                 AccessVlan = i.AccessVlan, TrunkVlans = i.TrunkVlans.ToList(),
                 TfIn = i.TfIn, TfOut = i.TfOut, Ip = i.Ip, Mask = i.Mask,
-                IsVlanif = i.IsVlanif, Cabled = i.Cabled
+                IsVlanif = i.IsVlanif, Cabled = i.Cabled,
+                PortSecurity = i.PortSecurity, PortSecurityMaxMac = i.PortSecurityMaxMac, PortSecuritySticky = i.PortSecuritySticky
             });
         if (s.Users.Count > 0)
             d.Users = s.Users.ToDictionary(u => u.Name, u => new LocalUser

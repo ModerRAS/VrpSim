@@ -254,8 +254,27 @@ public static class Cli
         var ctx = new ExecCtx { Dev = dev, S = session, Tokens = norm, Caps = finished[0].Caps };
         res.Lines = cmd.Run?.Invoke(ctx) ?? Array.Empty<string>();
         if (res.Error == null && !res.Lines.Any(l => l.StartsWith("Error:", StringComparison.Ordinal)))
+        {
             session.Timer.NoteStep();
+            // port-group / interface range 批量执行：真机会逐成员回显 "[sysname-接口名]命令"
+            if (session.View == "range" && session.RangeIfaces.Count > 1 && EchoInRange(norm))
+            {
+                var text = string.Join(" ", norm);
+                var echo = session.RangeIfaces.Select(n => "[" + dev.SysName + "-" + n + "]" + text).ToList();
+                res.Lines = res.Lines.Concat(echo).ToArray();
+            }
+        }
         return res;
+    }
+
+    // range/port-group 视图里会逐成员执行的命令（真机回显每个成员的提示符+命令）
+    static bool EchoInRange(List<string> norm)
+    {
+        static bool IsPortCmd(string w) => w is "shutdown" or "description" or "port" or "traffic-filter" or "port-security";
+        if (norm.Count == 0) return false;
+        var w0 = norm[0].ToLowerInvariant();
+        if (IsPortCmd(w0)) return true;
+        return w0 == "undo" && norm.Count > 1 && IsPortCmd(norm[1].ToLowerInvariant());
     }
 
     public static bool IsFinished(State s)
@@ -271,7 +290,8 @@ public static class Cli
                 stack.RemoveAt(stack.Count - 1);
                 continue;
             }
-            if (seq[0] is Rep) { seq.RemoveAt(0); continue; }
+            // 结尾的可选段（Opt）不影响命令完成判定：可用部分已消费完即可执行
+            if (seq[0] is Rep || seq[0] is Opt) { seq.RemoveAt(0); continue; }
             return false;
         }
     }
