@@ -1,6 +1,7 @@
 # 华为 VRP 交换机模拟终端（加固演练用）
 
 [![CI](https://github.com/ModerRAS/VrpSim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ModerRAS/VrpSim/actions/workflows/ci.yml)
+[![Pages](https://github.com/ModerRAS/VrpSim/actions/workflows/pages.yml/badge.svg?branch=main)](https://github.com/ModerRAS/VrpSim/actions/workflows/pages.yml)
 
 按 2026-11-12 / 11-13 两台现场配置（V200R011C10SPC600）写的**可交互 CLI 模拟器**：
 Tab 补全、`?` 帮助、缩写执行、视图切换、`display current-configuration` / `display this` 还原、
@@ -15,6 +16,8 @@ C# / .NET 10 实现，无第三方依赖，发布为 **NativeAOT 原生单文件
 - 和桌面版共用同一套命令树/补全/`?`/`check`/`display current-configuration` 逻辑（源码在 `web/`，共享根目录的 `Cli.cs`/`Commands.cs`/`Device.cs` 等）
 - 存档只存在当前页面内存里（刷新即重置，`save` 写页面内配置）——桌面版才落盘 `vrp-sim-state.json`
 - 首次加载约 2–3 MB（WASM 运行时，之后浏览器缓存）；构建/部署见 `.github/workflows/pages.yml`
+- 自定义域名走 Cloudflare 代理（`vrpsim.miaostay.com` CNAME → `moderras.github.io`）；如遇 522/证书异常，把该记录临时切成 DNS only 或 SSL 模式改 Full 即可
+- 刷新页面 = 重新开局（当前版本不做 localStorage 存档）
 
 ## 快速开始
 
