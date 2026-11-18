@@ -9,7 +9,8 @@ C# / .NET 10 实现，无第三方依赖，发布为 **NativeAOT 原生单文件
 
 ## 网页版（GitHub Pages，免安装）
 
-在线地址：**https://moderras.github.io/VrpSim/** —— 纯前端（Blazor WebAssembly），不需要服务器，浏览器打开即用。
+在线地址：**https://vrpsim.miaostay.com/** —— 纯前端（Blazor WebAssembly），不需要服务器，浏览器打开即用。
+（该仓库 Pages 绑定了自定义子域名 `vrpsim.miaostay.com`；如果你的网络解析不到，备用地址见 GitHub Pages 设置页。）
 
 - 和桌面版共用同一套命令树/补全/`?`/`check`/`display current-configuration` 逻辑（源码在 `web/`，共享根目录的 `Cli.cs`/`Commands.cs`/`Device.cs` 等）
 - 存档只存在当前页面内存里（刷新即重置，`save` 写页面内配置）——桌面版才落盘 `vrp-sim-state.json`
@@ -331,5 +332,8 @@ ACL/VLAN/用户/端口名），不存在的命令不会乱认（`show version` �
 | `saved-config.cfg` | `save` 落盘的当前配置（运行时生成） |
 | `dist/VrpSim.exe` | 本地发布产物（NativeAOT **x86** 原生单文件，无需 .NET 运行时；32/64 位 Windows 均可跑，3.14 MB） |
 | `.github/workflows/release.yml` | Release：单资产 x86 AOT 发布（跑 selftest + 生成 sha256，PDB 不上传；x64 可本地自建） |
+| `Platform.cs` | 平台抽象：输出/宽度/存档/reset 在控制台（Console/File）与网页（JS 回调/内存）间切换 |
+| `web/` | Blazor WebAssembly 网页版：`EngineService.cs`（引擎桥）、`TerminalHost.razor`、`wwwroot/`（终端 UI/JS/CSS），共享根目录命令逻辑 |
+| `.github/workflows/pages.yml` | 网页版构建 + GitHub Pages 部署（先装 wasm-tools，publish 后 upload-pages-artifact → deploy-pages） |
 
 Copyright (C) 2026 ModerRAS — GPL-3.0
